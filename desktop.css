@@ -1,0 +1,77 @@
+/* Caixa — agrupamentos (todas as larguras) e layout de computador (a partir de 960px). */
+
+.home, .home-main, .home-side, .lgroups, .split, .split-col { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
+.groups, .group { display: flex; flex-direction: column; }
+.ltable-wrap, .nav-brand, .nav-label { display: none; }
+
+@media (min-width: 960px) {
+  body { --side: 240px; }
+
+  /* ---------- navegação lateral ---------- */
+  .nav { left: 0; top: 0; bottom: 0; transform: none; width: var(--side); border-radius: 0; flex-direction: column; align-items: stretch; padding: calc(28px + var(--safe-t)) 16px 24px; gap: 6px; box-shadow: none; }
+  .nav-brand { display: flex; align-items: center; gap: 12px; color: #fff; font-family: var(--display); font-weight: 700; font-size: 22px; padding: 0 8px 26px; }
+  .nav-brand span { width: 40px; height: 40px; border-radius: 12px; background: var(--lime); color: var(--ink); display: grid; place-items: center; font-size: 22px; }
+  .nav button { width: 100%; height: 48px; border-radius: 999px; display: flex; align-items: center; justify-content: flex-start; gap: 12px; padding: 0 16px; background: transparent; color: var(--muted-dark); }
+  .nav button:hover:not([aria-current]) { background: var(--dark-2); color: #fff; }
+  .nav button[aria-current="page"] { background: var(--lime); color: var(--ink); }
+  .nav-label { display: inline; font-size: 15px; font-weight: 500; }
+
+  /* ---------- área de conteúdo ---------- */
+  .app { max-width: 1160px; width: auto; margin: 0 0 0 calc(var(--side) + max(0px, (100% - var(--side) - 1160px) / 2)); padding: calc(36px + var(--safe-t)) 40px 56px; gap: 22px; }
+  .app[data-screen="gate"] { margin: 0 auto; max-width: 440px; }
+  .top { min-height: 46px; }
+  .page-title { font-size: 30px; }
+
+  /* Início em painel: resumo à esquerda, lançamentos à direita */
+  .home { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(320px, 1fr); gap: 24px; align-items: start; }
+  .home-side { position: sticky; top: calc(24px + var(--safe-t)); }
+  .balance { padding: 28px; }
+  .balance-value { font-size: 56px; }
+
+  /* duas colunas lado a lado em Estatísticas e Combustível */
+  .split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 22px; align-items: start; }
+
+  /* Lançamentos em tabela */
+  .lgroups { display: none; }
+  .ltable-wrap { display: block; background: var(--card); border-radius: 24px; padding: 6px 10px; overflow-x: auto; }
+  .ltable { width: 100%; border-collapse: collapse; font-size: 14px; }
+  .ltable th { text-align: left; font-size: 12px; font-weight: 500; color: var(--ink-2); padding: 12px; white-space: nowrap; }
+  .ltable td { padding: 13px 12px; border-top: 1px solid var(--line-soft); }
+  .ltable td:nth-child(2) { font-weight: 500; }
+  .ltable td:nth-child(3), .ltable td:nth-child(4), .ltable td:first-child { color: var(--ink-2); white-space: nowrap; }
+  .ltable .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .ltable tbody tr { cursor: pointer; }
+  .ltable tbody tr:hover, .ltable tbody tr:focus-visible { background: var(--ground); outline: none; }
+  .search, .chips.scroll { max-width: 640px; }
+  .chips.scroll { margin: 0; padding: 0 0 4px; }
+
+  /* Lista de mercado em colunas */
+  .groups { display: block; column-count: 2; column-gap: 22px; }
+  .group { break-inside: avoid; margin-bottom: 18px; }
+  .group .group-label { margin-top: 0; }
+  .list-progress, .app[data-screen="lista"] > .btn.ghost { max-width: 640px; }
+
+  /* formulários em janela central */
+  .sheet { top: 50%; bottom: auto; left: 50%; right: auto; transform: translate(-50%, -50%); width: min(580px, calc(100vw - 48px)); max-height: 88vh; border-radius: 28px; padding: 26px 30px 30px; animation: pop 0.18s ease-out; }
+  .grabber { display: none; }
+  .toast { left: calc(50% + var(--side) / 2); bottom: 32px; }
+
+  /* foco e passagem do mouse */
+  @media (hover: hover) {
+    .action:hover span, .icon-btn:hover { border-color: var(--ink); }
+    .chip:hover:not([aria-pressed="true"]) { border-color: var(--ink); }
+    .link:hover { color: var(--ink-2); }
+  }
+}
+
+@media (min-width: 1280px) {
+  .home .tiles { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .home .tile strong { font-size: 24px; }
+}
+
+@media (min-width: 1440px) {
+  .groups { column-count: 3; }
+}
+
+@keyframes pop { from { opacity: 0; transform: translate(-50%, -47%); } to { opacity: 1; transform: translate(-50%, -50%); } }
+@media (prefers-reduced-motion: reduce) { .sheet { animation: none; } }

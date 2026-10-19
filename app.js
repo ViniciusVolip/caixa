@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '1.0.0';
+  const VERSION = '1.1.0';
   const LOCK_AFTER_MS = 3 * 60 * 1000;
 
   /* ================= armazenamento local ================= */
@@ -260,6 +260,7 @@
     const chip = p.dias === 0 ? `${p.proximo === 'vale' ? 'Vale' : 'Pagamento'} hoje` : `${p.proximo === 'vale' ? 'Vale' : 'Pagamento'} em ${p.dias} dia${p.dias === 1 ? '' : 's'}`;
     const recentes = lancamentos.slice(0, 5);
     return `${topBar()}${pendingBanner()}
+    <div class="home"><div class="home-main">
     <section class="balance" aria-label="Saldo do mês">
       <div class="balance-head"><span>Saldo de ${monthName(d.mes)}</span><span class="pill">${chip}</span></div>
       <span class="balance-value${r.saldo < 0 ? ' neg' : ''}">${brl(r.saldo)}</span>
@@ -280,8 +281,10 @@
     </div>
     <div class="tip">${I.bulb()}<p>${dica(r)}</p></div>
     ${r.acertoLabel ? `<div class="card"><div class="row"><span class="row-icon">${I.home(20)}</span><span class="row-main"><span>${esc(r.acertoLabel)}</span><small>Acerto da casa no mês</small></span><span class="row-value">${brl(r.acertoValor)}</span></div></div>` : ''}
+    </div><aside class="home-side">
     <div class="section-head"><h2>Últimos lançamentos</h2><button class="link" data-act="go" data-arg="lancamentos">Ver todos</button></div>
-    <div class="card">${recentes.length ? recentes.map(lancRow).join('') : '<div class="empty">Nada lançado ainda.</div>'}</div>`;
+    <div class="card">${recentes.length ? recentes.map(lancRow).join('') : '<div class="empty">Nada lançado ainda.</div>'}</div>
+    </aside></div>`;
   }
 
   function telaLancamentos() {
@@ -296,6 +299,7 @@
       <div class="chips scroll" role="group" aria-label="Mês">${meses.map((m) => `<button class="chip" data-act="filtro-mes" data-arg="${m}" aria-pressed="${m === S.filtro.mes}">${monthShort(m)}</button>`).join('')}</div>`;
     if (!lista.length) return html + `<div class="empty">${q ? 'Nenhum lançamento encontrado para essa busca.' : 'Nenhum lançamento neste mês.'}<br><button class="btn dark" data-act="novo-lanc">Lançar um gasto</button></div>`;
     html += `<p class="hint">${lista.length} lançamento${lista.length === 1 ? '' : 's'}, sua parte somando ${brl(total)}</p>`;
+    html += `<div class="ltable-wrap"><table class="ltable"><thead><tr><th scope="col">Data</th><th scope="col">Descrição</th><th scope="col">Categoria</th><th scope="col">Forma</th><th scope="col" class="num">Valor</th><th scope="col" class="num">Sua parte</th></tr></thead><tbody>${lista.map((l) => `<tr data-act="lanc" data-id="${esc(l.id)}" tabindex="0"><td>${l.data ? l.data.slice(8, 10) + '/' + l.data.slice(5, 7) : ''}</td><td>${l.pending ? '<i class="pending-dot" aria-label="aguardando envio"></i>' : ''}${esc(l.descricao)}</td><td>${esc(l.categoria || 'Sem categoria')}</td><td>${esc(l.forma || '')}</td><td class="num">${brl(l.valor)}</td><td class="num">${brl(l.minhaParte || l.valor)}</td></tr>`).join('')}</tbody></table></div><div class="lgroups">`;
     let dia = null;
     let open = false;
     lista.forEach((l) => {
@@ -308,6 +312,7 @@
       html += lancRow(l);
     });
     if (open) html += '</div>';
+    html += '</div>';
     return html;
   }
 
@@ -332,9 +337,9 @@
       const top = cats.slice(0, 5);
       const max = top.length ? top[0].valor : 1;
       html += `<div class="duo"><div class="stat dark"><span>Despesas de ${monthName(d.mes)}</span><strong>${brl(r.despesas)}</strong></div><div class="stat lime"><span>Renda comprometida</span><strong>${pct(r.rendaComprometida)}</strong></div></div>`;
-      html += `<div class="card pad"><div class="card-title"><h3>Para onde foi</h3><small>As categorias que mais pesaram em ${monthName(d.mes)}</small></div>
+      html += `<div class="split"><div class="card pad"><div class="card-title"><h3>Para onde foi</h3><small>As categorias que mais pesaram em ${monthName(d.mes)}</small></div>
         <div class="pills">${top.map((c, i) => `<div class="pillbar"><div class="track"><div class="fill" style="height:${Math.max(24, (c.valor / max) * 100)}%;background:${BAR_COLORS[i]};${i === 4 ? 'color:#fff;' : ''}">${pct(r.despesas ? c.valor / r.despesas : 0)}</div></div><small title="${esc(c.nome)}">${esc(c.nome.split(' ')[0])}</small></div>`).join('')}</div></div>`;
-      html += `<div class="card">${cats.map((c) => `<div class="row"><span class="row-icon">${catIcon(c.nome)}</span><span class="row-main"><span>${esc(c.nome)}</span><small>${pct(r.despesas ? c.valor / r.despesas : 0)} das despesas</small></span><span class="row-value">${brl(c.valor)}</span></div>`).join('')}</div>`;
+      html += `<div class="card">${cats.map((c) => `<div class="row"><span class="row-icon">${catIcon(c.nome)}</span><span class="row-main"><span>${esc(c.nome)}</span><small>${pct(r.despesas ? c.valor / r.despesas : 0)} das despesas</small></span><span class="row-value">${brl(c.valor)}</span></div>`).join('')}</div></div>`;
       return html;
     }
     const m = d.mercado || { compras: [], meses: [] };
@@ -359,10 +364,11 @@
     const precoMes = doMes.litros ? doMes.gasto / doMes.litros : 0;
     html += `<div class="duo"><div class="stat dark"><span>Gasto em ${monthName(atual)}</span><strong>${brl(doMes.gasto)}</strong></div><div class="stat lime"><span>Preço médio do litro</span><strong>${precoMes ? 'R$ ' + precoMes.toFixed(2).replace('.', ',') : '—'}</strong></div></div>`;
     if (!c.registros.length) return html + `<div class="empty">Nenhum abastecimento registrado ainda.</div>`;
-    html += `<div class="card pad"><div class="card-title"><h3>Mês a mês</h3><small>Quanto foi para o tanque</small></div>${colsChart(c.meses, 'gasto', atual)}</div>`;
+    html += `<div class="split"><div class="card pad"><div class="card-title"><h3>Mês a mês</h3><small>Quanto foi para o tanque</small></div>${colsChart(c.meses, 'gasto', atual)}</div><div class="split-col">`;
     if (c.postos.length) {
       html += `<div class="section-head"><h2>Postos</h2></div><div class="card">${c.postos.map((p, i) => `<div class="row"><span class="row-icon">${I.fuel(20)}</span><span class="row-main"><span>${esc(p.posto || 'Sem nome')}${i === 0 && c.postos.length > 1 ? '<span class="badge">mais barato</span>' : ''}</span><small>${p.vezes} abastecimento${p.vezes === 1 ? '' : 's'}, ${p.litros.toFixed(1).replace('.', ',')} L</small></span><span class="row-value">R$ ${p.precoMedio.toFixed(3).replace('.', ',')}<small>por litro</small></span></div>`).join('')}</div>`;
     }
+    html += '</div></div>';
     html += `<div class="section-head"><h2>Histórico</h2></div><div class="card">${c.registros.slice(0, 10).map((r) => `<div class="row"><span class="row-icon">${I.fuel(20)}</span><span class="row-main"><span>${esc(r.posto)}</span><small>${dayLabel(r.data)}${r.litros ? ', ' + r.litros.toFixed(1).replace('.', ',') + ' L' : ''}${r.consumo ? ', ' + String(r.consumo).replace('.', ',') + ' km/l' : ''}</small></span><span class="row-value">${brl(r.total)}</span></div>`).join('')}</div>`;
     return html;
   }
@@ -377,13 +383,15 @@
     const grupos = {};
     const ordem = [];
     lista.forEach((it) => { const g = it.categoria || 'Outros'; if (!grupos[g]) { grupos[g] = []; ordem.push(g); } grupos[g].push(it); });
+    html += '<div class="groups">';
     ordem.forEach((g) => {
       const itens = grupos[g].slice().sort((a, b) => Number(a.comprado) - Number(b.comprado));
       const ok = itens.filter((i) => i.comprado).length;
-      html += `<div class="group-label"><span>${esc(g)}</span><span>${ok}/${itens.length}</span></div><div class="card">`;
+      html += `<section class="group"><div class="group-label"><span>${esc(g)}</span><span>${ok}/${itens.length}</span></div><div class="card">`;
       html += itens.map((it) => `<button class="item${it.comprado ? ' done' : ''}" data-act="toggle-item" data-id="${esc(it.id)}" aria-pressed="${it.comprado}"><span class="check">${it.comprado ? I.check(16) : ''}</span><span class="item-name">${it.pending ? '<i class="pending-dot"></i>' : ''}${esc(it.produto)}</span><span class="item-qty">${it.quantidade ? String(it.quantidade).replace('.', ',') + 'x' : ''}</span></button>`).join('');
-      html += '</div>';
+      html += '</div></section>';
     });
+    html += '</div>';
     return html;
   }
 
@@ -711,7 +719,7 @@
   function renderNav(show) {
     $nav.hidden = !show;
     if (!show) return;
-    $nav.innerHTML = NAV.map(([id, label, ic]) => `<button data-act="go" data-arg="${id}" aria-label="${label}"${S.screen === id ? ' aria-current="page"' : ''}>${ic()}</button>`).join('');
+    $nav.innerHTML = '<div class="nav-brand" aria-hidden="true"><span>C</span>Caixa</div>' + NAV.map(([id, label, ic]) => `<button data-act="go" data-arg="${id}" aria-label="${label}"${S.screen === id ? ' aria-current="page"' : ''}>${ic()}<span class="nav-label">${label}</span></button>`).join('');
   }
 
   const TELAS = { inicio: telaInicio, lancamentos: telaLancamentos, estatisticas: telaEstatisticas, lista: telaLista, combustivel: telaCombustivel };
@@ -719,6 +727,7 @@
   function render() {
     const focusId = document.activeElement && document.activeElement.id === 'busca' ? 'busca' : null;
     const caret = focusId ? document.activeElement.selectionStart : 0;
+    $app.dataset.screen = !S.cfg || S.gate ? 'gate' : S.screen;
     if (!S.cfg) { $app.innerHTML = telaSetup(); renderNav(false); bindSetup(); return; }
     if (S.gate) { $app.innerHTML = telaGate(); renderNav(false); return; }
     $app.innerHTML = (TELAS[S.screen] || telaInicio)();
@@ -830,6 +839,7 @@
 
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && $sheet.innerHTML) closeSheet();
+    if (e.key === 'Enter' && e.target.matches && e.target.matches('tr[data-act]')) e.target.click();
     if (S.gate && /^[0-9]$/.test(e.key)) pinDigit(e.key);
     if (S.gate && e.key === 'Backspace') { S.gate.buf = S.gate.buf.slice(0, -1); render(); }
   });
