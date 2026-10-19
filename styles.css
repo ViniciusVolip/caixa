@@ -198,3 +198,19 @@ textarea.input { padding: 14px 16px; min-height: 80px; resize: vertical; }
 
 /* ---------- aviso ---------- */
 .toast { position: fixed; left: 50%; bottom: calc(96px + var(--safe-b)); transform: translateX(-50%); background: var(--ink); color: #fff; border-radius: 999px; padding: 12px 18px; font-size: 14px; z-index: 30; max-width: calc(100% - 36px); text-align: center; }
+
+/* mês escolhido e despesas separadas (v1.2) */
+.mes-chips .chip em { font-style: normal; font-size: 11px; opacity: 0.7; margin-left: 2px; }
+.xp { border-bottom: 1px solid var(--line-soft); }
+.xp:last-child { border-bottom: 0; }
+.xp > summary { list-style: none; cursor: pointer; border-bottom: 0; }
+.xp > summary::-webkit-details-marker { display: none; }
+.xp-chev { width: 10px; height: 10px; flex-shrink: 0; border-right: 2px solid var(--ink-2); border-bottom: 2px solid var(--ink-2); transform: rotate(45deg) translate(-2px, -2px); transition: transform 0.15s ease; }
+.xp[open] > summary .xp-chev { transform: rotate(-135deg) translate(-2px, -2px); }
+.xp-body { margin: 0 0 10px; padding: 2px 12px; background: var(--ground); border-radius: 16px; }
+.xp-body .row { padding: 10px 0; }
+.xp-body .row:last-child { border-bottom: 0; }
+.xp-body .row-main span { font-size: 14px; }
+.xp-empty { padding: 10px 0; }
+@media (prefers-reduced-motion: reduce) { .xp-chev { transition: none; } }
+@media (min-width: 960px) { .xp-body { margin-left: 52px; } }

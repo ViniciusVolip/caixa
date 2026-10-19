@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '1.1.0';
+  const VERSION = '1.2.0';
   const LOCK_AFTER_MS = 3 * 60 * 1000;
 
   /* ================= armazenamento local ================= */
@@ -18,7 +18,10 @@
     lastSync: LS.get('lastSync', null),
     screen: 'inicio',
     statsTab: 'categorias',
-    filtro: { mes: null, q: '' },
+    filtro: { q: '', tipo: 'todos' },
+    mesSel: null,
+    porMes: {},
+    abertos: new Set(),
     syncing: false,
     gate: null,
     hiddenAt: null
@@ -116,6 +119,98 @@
     return { d, lancamentos, lista };
   }
 
+  /* ================= mês escolhido ================= */
+  function mesesLista(d, lancamentos) {
+    const set = new Set((d.meses || []).concat(lancamentos.map((l) => l.mes).filter(Boolean)));
+    if (d.mes) set.add(d.mes);
+    return Array.from(set).sort();
+  }
+  const mesAtivo = (d) => S.mesSel || d.mes;
+
+  function dadosMes(d) {
+    const m = mesAtivo(d);
+    if (!m || m === d.mes) return { mes: d.mes, resumo: d.resumo, categorias: d.categorias || [], separadas: d.separadas || [], itens: d.itens || [], atual: true };
+    const c = S.porMes[m];
+    return c && c.data ? Object.assign({}, c.data, { atual: false }) : { mes: m, carregando: true, atual: false, categorias: [], separadas: [], itens: [] };
+  }
+
+  async function carregarMes(m, force) {
+    if (!S.cfg || !m) return;
+    const c = S.porMes[m];
+    if (c && c.busy) return;
+    if (!force && c && c.data && Date.now() - c.ts < 120000) return;
+    S.porMes[m] = Object.assign({}, c, { busy: true });
+    try {
+      const res = await api({ action: 'mes', mes: m });
+      S.porMes[m] = { data: res.data, ts: Date.now() };
+    } catch (err) {
+      if (c && c.data) S.porMes[m] = c; else delete S.porMes[m];
+      toast(err.network ? 'Sem conexão para buscar esse mês.' : 'Não foi possível buscar o mês: ' + err.message);
+      if (!(c && c.data) && S.mesSel === m) S.mesSel = null;
+    }
+    render();
+  }
+
+  function escolherMes(m) {
+    S.mesSel = S.data && m === S.data.mes ? null : m;
+    render();
+    if (S.mesSel) carregarMes(m);
+  }
+
+  function mesLabel(iso, atualIso) {
+    const d = fromIso(iso);
+    const nome = MESES[d.getMonth()];
+    return d.getFullYear() === fromIso(atualIso || todayIso()).getFullYear() ? nome : nome + ' de ' + d.getFullYear();
+  }
+
+  function mesChips(d, lancamentos) {
+    const meses = mesesLista(d, lancamentos);
+    const at = mesAtivo(d);
+    return `<div class="chips scroll mes-chips" role="group" aria-label="Mês">${meses.map((m) => `<button class="chip" data-act="mes" data-arg="${m}" aria-pressed="${m === at}">${monthShort(m)}${m === d.mes ? ' <em>atual</em>' : ''}</button>`).join('')}</div>`;
+  }
+
+  const GRUPOS = ['Casa: contas fixas', 'Casa: gastos do mês', 'Pessoais: contas fixas', 'Pessoais: gastos do mês', 'Fatura Nubank', 'Parcelas de dívidas'];
+  const GRUPO_NOME = { 'Casa: contas fixas': ['Contas fixas', 'Casa'], 'Casa: gastos do mês': ['Gastos do mês', 'Casa'], 'Pessoais: contas fixas': ['Contas fixas', 'Pessoais'], 'Pessoais: gastos do mês': ['Gastos do mês', 'Pessoais'] };
+  const grupoTitulo = (g) => (GRUPO_NOME[g] ? GRUPO_NOME[g][0] : g);
+  const grupoDono = (g) => (GRUPO_NOME[g] ? GRUPO_NOME[g][1] + ', ' : '');
+  const grupoIcon = (g) => (/^Casa/.test(g) ? I.home : /^Fatura/.test(g) ? I.card : /dívidas/i.test(g) ? I.card : I.tag)(20);
+
+  /** Tudo o que pesa no mês: fixas, parcelas e dívidas (da planilha) + lançamentos do mês. */
+  function itensDoMes(dm, lancamentos) {
+    const lanc = lancamentos.filter((l) => l.mes === dm.mes).map((l) => ({
+      origem: 'Lançamento', id: l.id, data: l.data, pending: l.pending,
+      grupo: l.forma === 'Nubank' ? 'Fatura Nubank' : l.tipo === 'Casa' ? 'Casa: gastos do mês' : 'Pessoais: gastos do mês',
+      descricao: l.descricao, categoria: l.categoria || 'Sem categoria', tipo: l.tipo, forma: l.forma,
+      valor: Number(l.valor) || 0, minhaParte: Number(l.minhaParte) || Number(l.valor) || 0
+    }));
+    return (dm.itens || []).concat(lanc);
+  }
+
+  function itemRow(it) {
+    const sub = [it.origem === 'Lançamento' ? (it.data ? it.data.slice(8, 10) + '/' + it.data.slice(5, 7) : 'Lançamento') : it.origem, it.categoria, it.forma].filter(Boolean).join(', ');
+    const parte = Math.abs(it.minhaParte - it.valor) > 0.009 ? `<small>de ${brl(it.valor)}</small>` : '';
+    const inner = `<span class="row-main"><span>${it.pending ? '<i class="pending-dot" aria-label="aguardando envio"></i>' : ''}${esc(it.descricao)}</span><small>${esc(sub)}</small></span><span class="row-value">${brl(it.minhaParte)}${parte}</span>`;
+    return it.origem === 'Lançamento' ? `<button class="row" data-act="lanc" data-id="${esc(it.id)}">${inner}</button>` : `<div class="row">${inner}</div>`;
+  }
+
+  function bloco(key, icon, titulo, sub, valor, itens) {
+    const open = S.abertos.has(key) ? ' open' : '';
+    const corpo = itens.length ? itens.sort((a, b) => b.minhaParte - a.minhaParte).map(itemRow).join('') : '<p class="hint xp-empty">Nenhum item detalhado.</p>';
+    return `<details class="xp" data-key="${esc(key)}"${open}><summary class="row"><span class="row-icon">${icon}</span><span class="row-main"><span>${esc(titulo)}</span><small>${sub}</small></span><span class="row-value">${brl(valor)}</span><span class="xp-chev" aria-hidden="true"></span></summary><div class="xp-body">${corpo}</div></details>`;
+  }
+
+  function despesasSeparadas(dm, lancamentos, total) {
+    const itens = itensDoMes(dm, lancamentos);
+    const sep = dm.separadas && dm.separadas.length ? dm.separadas : GRUPOS.map((g) => ({ nome: g, valor: itens.filter((i) => i.grupo === g).reduce((s, i) => s + i.minhaParte, 0) }));
+    const html = sep.map((g) => {
+      const its = itens.filter((i) => i.grupo === g.nome);
+      if (!(g.valor > 0) && !its.length) return '';
+      const sub = `${grupoDono(g.nome)}${its.length} ${its.length === 1 ? 'item' : 'itens'}${total ? ', ' + pct(g.valor / total) : ''}`;
+      return bloco('g:' + g.nome, grupoIcon(g.nome), grupoTitulo(g.nome), sub, g.valor, its);
+    }).join('');
+    return html || '<div class="empty">Nenhuma despesa neste mês.</div>';
+  }
+
   /* ================= conversa com a planilha ================= */
   async function api(body) {
     let r;
@@ -153,6 +248,8 @@
       S.data = res.data;
       S.lastSync = Date.now();
       LS.set('data', S.data); LS.set('queue', S.queue); LS.set('lastSync', S.lastSync);
+      if (ops.length) Object.keys(S.porMes).forEach((m) => { if (S.porMes[m].data) S.porMes[m].ts = 0; });
+      if (S.mesSel) setTimeout(() => carregarMes(S.mesSel), 0);
     } catch (err) {
       if (err.code === 'unauthorized') toast('A chave foi recusada. Abra as configurações e confira.');
       else if (err.code === 'blocked') toast('Acesso pausado por excesso de tentativas. Tente em 15 minutos.');
@@ -253,51 +350,60 @@
   function telaInicio() {
     const { d, lancamentos } = view();
     if (!d.resumo) return topBar() + pendingBanner() + loading();
-    const r = d.resumo;
+    const dm = dadosMes(d);
+    const chips = mesChips(d, lancamentos);
+    if (dm.carregando) return `${topBar()}${pendingBanner()}${chips}<div class="empty">Buscando ${mesLabel(dm.mes, d.mes)} na planilha…</div>`;
+    const r = dm.resumo;
     const p = periodo();
     const usado = r.receitas ? Math.min(1, r.despesas / r.receitas) : 0;
-    const top = (d.categorias || []).slice().sort((a, b) => b.valor - a.valor)[0];
-    const chip = p.dias === 0 ? `${p.proximo === 'vale' ? 'Vale' : 'Pagamento'} hoje` : `${p.proximo === 'vale' ? 'Vale' : 'Pagamento'} em ${p.dias} dia${p.dias === 1 ? '' : 's'}`;
-    const recentes = lancamentos.slice(0, 5);
-    return `${topBar()}${pendingBanner()}
+    const top = (dm.categorias || []).slice().sort((a, b) => b.valor - a.valor)[0];
+    const chip = !dm.atual ? (dm.mes > d.mes ? 'Previsão' : 'Mês fechado') : p.dias === 0 ? `${p.proximo === 'vale' ? 'Vale' : 'Pagamento'} hoje` : `${p.proximo === 'vale' ? 'Vale' : 'Pagamento'} em ${p.dias} dia${p.dias === 1 ? '' : 's'}`;
+    const doMes = lancamentos.filter((l) => l.mes === dm.mes);
+    const recentes = doMes.slice(0, 5);
+    const sep = (dm.separadas || []).filter((g) => g.valor > 0);
+    return `${topBar()}${pendingBanner()}${chips}
     <div class="home"><div class="home-main">
     <section class="balance" aria-label="Saldo do mês">
-      <div class="balance-head"><span>Saldo de ${monthName(d.mes)}</span><span class="pill">${chip}</span></div>
+      <div class="balance-head"><span>Saldo de ${mesLabel(dm.mes, d.mes)}</span><span class="pill">${chip}</span></div>
       <span class="balance-value${r.saldo < 0 ? ' neg' : ''}">${brl(r.saldo)}</span>
       <div class="bar${usado > 0.9 ? ' warn' : ''}" role="img" aria-label="${pct(usado)} da renda comprometida"><i style="width:${(usado * 100).toFixed(1)}%"></i></div>
       <div class="balance-foot"><span>Receitas <strong>${brl(r.receitas)}</strong></span><span>Despesas <strong>${brl(r.despesas)}</strong></span></div>
     </section>
-    <div class="actions">
+    ${dm.atual ? `<div class="actions">
       <button class="action main" data-act="novo-lanc"><span>${I.plus(24)}</span>Lançar</button>
       <button class="action" data-act="novo-abast"><span>${I.fuel()}</span>Abastecer</button>
       <button class="action" data-act="novo-mercado"><span>${I.receipt()}</span>Mercado</button>
       <button class="action" data-act="go" data-arg="lista"><span>${I.cart()}</span>Lista</button>
-    </div>
+    </div>` : ''}
     <div class="tiles">
       ${sobraTile('Sobra do pagamento', r.sobraPagamento)}
       ${sobraTile('Sobra do vale', r.sobraVale)}
       <div class="tile"><b>Fatura Nubank</b><strong>${brl(r.fatura)}</strong></div>
       <div class="tile yellow"><b>Maior gasto</b><span><strong>${top ? esc(top.nome) : '—'}</strong>${top ? `<br><em>${brl(top.valor)}, ${pct(r.despesas ? top.valor / r.despesas : 0)}</em>` : ''}</span></div>
     </div>
-    <div class="tip">${I.bulb()}<p>${dica(r)}</p></div>
-    ${r.acertoLabel ? `<div class="card"><div class="row"><span class="row-icon">${I.home(20)}</span><span class="row-main"><span>${esc(r.acertoLabel)}</span><small>Acerto da casa no mês</small></span><span class="row-value">${brl(r.acertoValor)}</span></div></div>` : ''}
+    ${sep.length ? `<div class="section-head"><h2>Despesas separadas</h2><button class="link" data-act="go" data-arg="estatisticas">Detalhar</button></div>
+    <div class="card">${sep.map((g) => `<button class="row" data-act="ver-grupo" data-arg="${esc(g.nome)}"><span class="row-icon">${grupoIcon(g.nome)}</span><span class="row-main"><span>${esc(grupoTitulo(g.nome))}</span><small>${grupoDono(g.nome)}${pct(r.despesas ? g.valor / r.despesas : 0)} das despesas</small></span><span class="row-value">${brl(g.valor)}</span></button>`).join('')}</div>` : ''}
+    ${dm.atual ? `<div class="tip">${I.bulb()}<p>${dica(r)}</p></div>` : ''}
+    ${r.acertoLabel ? `<div class="card"><div class="row"><span class="row-icon">${I.home(20)}</span><span class="row-main"><span>${esc(r.acertoLabel)}</span><small>Acerto da casa em ${mesLabel(dm.mes, d.mes)}</small></span><span class="row-value">${brl(r.acertoValor)}</span></div></div>` : ''}
     </div><aside class="home-side">
-    <div class="section-head"><h2>Últimos lançamentos</h2><button class="link" data-act="go" data-arg="lancamentos">Ver todos</button></div>
-    <div class="card">${recentes.length ? recentes.map(lancRow).join('') : '<div class="empty">Nada lançado ainda.</div>'}</div>
+    <div class="section-head"><h2>${dm.atual ? 'Últimos lançamentos' : 'Lançamentos de ' + monthName(dm.mes)}</h2><button class="link" data-act="go" data-arg="lancamentos">Ver todos</button></div>
+    <div class="card">${recentes.length ? recentes.map(lancRow).join('') : '<div class="empty">Nada lançado neste mês.</div>'}</div>
     </aside></div>`;
   }
 
   function telaLancamentos() {
     const { d, lancamentos } = view();
-    const meses = Array.from(new Set(lancamentos.map((l) => l.mes).filter(Boolean))).sort().reverse();
-    if (!S.filtro.mes || !meses.includes(S.filtro.mes)) S.filtro.mes = meses.includes(d.mes) ? d.mes : meses[0] || null;
+    const mes = mesAtivo(d);
     const q = S.filtro.q.trim().toLowerCase();
-    const lista = lancamentos.filter((l) => (!S.filtro.mes || l.mes === S.filtro.mes) && (!q || (l.descricao + ' ' + l.categoria + ' ' + (l.obs || '')).toLowerCase().includes(q)));
+    const TIPOS = [['todos', 'Tudo'], ['Casa', 'Casa'], ['Pessoal', 'Pessoais'], ['Nubank', 'Nubank']];
+    const okTipo = (l) => S.filtro.tipo === 'todos' || (S.filtro.tipo === 'Nubank' ? l.forma === 'Nubank' : l.tipo === S.filtro.tipo);
+    const lista = lancamentos.filter((l) => (!mes || l.mes === mes) && okTipo(l) && (!q || (l.descricao + ' ' + l.categoria + ' ' + (l.obs || '')).toLowerCase().includes(q)));
     const total = lista.reduce((s, l) => s + (Number(l.minhaParte) || Number(l.valor) || 0), 0);
     let html = `<header class="top"><h1 class="page-title">Lançamentos</h1><button class="icon-btn" data-act="novo-lanc" aria-label="Novo lançamento">${I.plus(20)}</button></header>
       <label class="search">${I.search(18)}<span class="sr">Buscar</span><input type="search" id="busca" placeholder="Buscar por descrição ou categoria" value="${esc(S.filtro.q)}"></label>
-      <div class="chips scroll" role="group" aria-label="Mês">${meses.map((m) => `<button class="chip" data-act="filtro-mes" data-arg="${m}" aria-pressed="${m === S.filtro.mes}">${monthShort(m)}</button>`).join('')}</div>`;
-    if (!lista.length) return html + `<div class="empty">${q ? 'Nenhum lançamento encontrado para essa busca.' : 'Nenhum lançamento neste mês.'}<br><button class="btn dark" data-act="novo-lanc">Lançar um gasto</button></div>`;
+      ${mesChips(d, lancamentos)}
+      <div class="seg" role="group" aria-label="Tipo de despesa">${TIPOS.map(([k, label]) => `<button data-act="filtro-tipo" data-arg="${k}" aria-pressed="${S.filtro.tipo === k}">${label}</button>`).join('')}</div>`;
+    if (!lista.length) return html + `<div class="empty">${q ? 'Nenhum lançamento encontrado para essa busca.' : S.filtro.tipo !== 'todos' ? 'Nenhum lançamento desse tipo neste mês.' : 'Nenhum lançamento neste mês.'}<br><button class="btn dark" data-act="novo-lanc">Lançar um gasto</button></div>`;
     html += `<p class="hint">${lista.length} lançamento${lista.length === 1 ? '' : 's'}, sua parte somando ${brl(total)}</p>`;
     html += `<div class="ltable-wrap"><table class="ltable"><thead><tr><th scope="col">Data</th><th scope="col">Descrição</th><th scope="col">Categoria</th><th scope="col">Forma</th><th scope="col" class="num">Valor</th><th scope="col" class="num">Sua parte</th></tr></thead><tbody>${lista.map((l) => `<tr data-act="lanc" data-id="${esc(l.id)}" tabindex="0"><td>${l.data ? l.data.slice(8, 10) + '/' + l.data.slice(5, 7) : ''}</td><td>${l.pending ? '<i class="pending-dot" aria-label="aguardando envio"></i>' : ''}${esc(l.descricao)}</td><td>${esc(l.categoria || 'Sem categoria')}</td><td>${esc(l.forma || '')}</td><td class="num">${brl(l.valor)}</td><td class="num">${brl(l.minhaParte || l.valor)}</td></tr>`).join('')}</tbody></table></div><div class="lgroups">`;
     let dia = null;
@@ -332,14 +438,22 @@
       </div>`;
     if (!d.resumo) return html + loading();
     if (S.statsTab === 'categorias') {
-      const r = d.resumo;
-      const cats = (d.categorias || []).filter((c) => c.valor > 0).sort((a, b) => b.valor - a.valor);
+      const { lancamentos } = view();
+      const dm = dadosMes(d);
+      html += mesChips(d, lancamentos);
+      if (dm.carregando) return html + `<div class="empty">Buscando ${mesLabel(dm.mes, d.mes)} na planilha…</div>`;
+      const r = dm.resumo;
+      const nome = mesLabel(dm.mes, d.mes);
+      const cats = (dm.categorias || []).filter((c) => c.valor > 0).sort((a, b) => b.valor - a.valor);
       const top = cats.slice(0, 5);
       const max = top.length ? top[0].valor : 1;
-      html += `<div class="duo"><div class="stat dark"><span>Despesas de ${monthName(d.mes)}</span><strong>${brl(r.despesas)}</strong></div><div class="stat lime"><span>Renda comprometida</span><strong>${pct(r.rendaComprometida)}</strong></div></div>`;
-      html += `<div class="split"><div class="card pad"><div class="card-title"><h3>Para onde foi</h3><small>As categorias que mais pesaram em ${monthName(d.mes)}</small></div>
-        <div class="pills">${top.map((c, i) => `<div class="pillbar"><div class="track"><div class="fill" style="height:${Math.max(24, (c.valor / max) * 100)}%;background:${BAR_COLORS[i]};${i === 4 ? 'color:#fff;' : ''}">${pct(r.despesas ? c.valor / r.despesas : 0)}</div></div><small title="${esc(c.nome)}">${esc(c.nome.split(' ')[0])}</small></div>`).join('')}</div></div>`;
-      html += `<div class="card">${cats.map((c) => `<div class="row"><span class="row-icon">${catIcon(c.nome)}</span><span class="row-main"><span>${esc(c.nome)}</span><small>${pct(r.despesas ? c.valor / r.despesas : 0)} das despesas</small></span><span class="row-value">${brl(c.valor)}</span></div>`).join('')}</div></div>`;
+      const itens = itensDoMes(dm, lancamentos);
+      html += `<div class="duo"><div class="stat dark"><span>Despesas de ${nome}</span><strong>${brl(r.despesas)}</strong></div><div class="stat lime"><span>Renda comprometida</span><strong>${pct(r.rendaComprometida)}</strong></div></div>`;
+      html += `<div class="split"><div class="split-col"><div class="section-head"><h2>Despesas separadas</h2></div><p class="hint">Toque num grupo para ver o que entrou nele. Valores da sua parte.</p><div class="card">${despesasSeparadas(dm, lancamentos, r.despesas)}</div></div>`;
+      html += `<div class="split-col">${top.length ? `<div class="card pad"><div class="card-title"><h3>Para onde foi</h3><small>As categorias que mais pesaram em ${nome}</small></div>
+        <div class="pills">${top.map((c, i) => `<div class="pillbar"><div class="track"><div class="fill" style="height:${Math.max(24, (c.valor / max) * 100)}%;background:${BAR_COLORS[i]};${i === 4 ? 'color:#fff;' : ''}">${pct(r.despesas ? c.valor / r.despesas : 0)}</div></div><small title="${esc(c.nome)}">${esc(c.nome.split(' ')[0])}</small></div>`).join('')}</div></div>` : ''}
+        <div class="section-head"><h2>Por categoria</h2></div>
+        <div class="card">${cats.length ? cats.map((c) => { const its = itens.filter((i) => i.categoria === c.nome); return bloco('c:' + c.nome, catIcon(c.nome), c.nome, `${pct(r.despesas ? c.valor / r.despesas : 0)} das despesas`, c.valor, its); }).join('') : '<div class="empty">Nenhuma despesa neste mês.</div>'}</div></div></div>`;
       return html;
     }
     const m = d.mercado || { compras: [], meses: [] };
@@ -730,8 +844,15 @@
     $app.dataset.screen = !S.cfg || S.gate ? 'gate' : S.screen;
     if (!S.cfg) { $app.innerHTML = telaSetup(); renderNav(false); bindSetup(); return; }
     if (S.gate) { $app.innerHTML = telaGate(); renderNav(false); return; }
+    const prevScroll = {};
+    $app.querySelectorAll('.mes-chips').forEach((c, i) => { prevScroll[i] = c.scrollLeft; });
     $app.innerHTML = (TELAS[S.screen] || telaInicio)();
     renderNav(true);
+    $app.querySelectorAll('.mes-chips').forEach((c, i) => {
+      const on = c.querySelector('[aria-pressed="true"]');
+      if (i in prevScroll) c.scrollLeft = prevScroll[i];
+      if (on && (on.offsetLeft < c.scrollLeft || on.offsetLeft + on.offsetWidth > c.scrollLeft + c.clientWidth)) c.scrollLeft = on.offsetLeft - (c.clientWidth - on.offsetWidth) / 2;
+    });
     if (focusId) { const el = document.getElementById(focusId); if (el) { el.focus(); el.setSelectionRange(caret, caret); } }
   }
 
@@ -788,7 +909,9 @@
       case 'novo-item': formItem(); break;
       case 'lanc': detalheLanc(id); break;
       case 'close-sheet': closeSheet(); break;
-      case 'filtro-mes': S.filtro.mes = arg; render(); break;
+      case 'mes': escolherMes(arg); break;
+      case 'filtro-tipo': S.filtro.tipo = arg; render(); break;
+      case 'ver-grupo': S.abertos.add('g:' + arg); S.screen = 'estatisticas'; S.statsTab = 'categorias'; render(); window.scrollTo(0, 0); break;
       case 'stats-tab': S.statsTab = arg; render(); break;
       case 'toggle-item': {
         const it = view().lista.find((x) => x.id === id);
@@ -832,6 +955,12 @@
       default: break;
     }
   });
+
+  document.addEventListener('toggle', (e) => {
+    const el = e.target;
+    if (!el.matches || !el.matches('details.xp')) return;
+    if (el.open) S.abertos.add(el.dataset.key); else S.abertos.delete(el.dataset.key);
+  }, true);
 
   document.addEventListener('input', (e) => {
     if (e.target.id === 'busca') { S.filtro.q = e.target.value; render(); }
