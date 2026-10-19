@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '1.2.0';
+  const VERSION = '1.3.0';
   const LOCK_AFTER_MS = 3 * 60 * 1000;
 
   /* ================= armazenamento local ================= */
@@ -89,7 +89,8 @@
     card: (s) => svg('<rect x="3" y="6" width="18" height="12" rx="2"/><path d="M3 10h18M7 15h4"/>', s),
     tag: (s) => svg('<path d="M4 4h7l9 9-7 7-9-9z"/><circle cx="8.5" cy="8.5" r="1.2"/>', s),
     lock: (s) => svg('<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>', s),
-    back: (s) => svg('<path d="M15 5l-7 7 7 7"/>', s)
+    back: (s) => svg('<path d="M15 5l-7 7 7 7"/>', s),
+    piggy: (s) => svg('<path d="M19 10.5c.8.3 1.5 1 1.5 2v1.5h-1.6a6.5 6.5 0 0 1-2.4 2.8V19h-2.5v-1.5h-4V19H7.5v-2.4A6 6 0 0 1 5 11.5C5 8.5 8 6 12 6c1.3 0 2.5.2 3.5.7L18 5.5v3z"/><circle cx="15.5" cy="10.5" r="0.7"/><path d="M3.5 10.5c0 1 .7 1.6 1.5 1.6"/>', s)
   };
   const CAT_ICON = {
     'Moradia': 'home', 'Contas da casa': 'bolt', 'Compras da casa': 'cart', 'Alimentação': 'cart', 'Pets': 'paw',
@@ -116,7 +117,18 @@
     const lista = (d.lista || []).map((it) => (it.id in toggles ? Object.assign({}, it, { comprado: toggles[it.id] }) : it));
     S.queue.forEach((o) => { if (o.op === 'addListaItem') lista.push({ id: o.id, produto: o.data.produto, quantidade: o.data.quantidade, categoria: o.data.categoria, comprado: o.id in toggles ? toggles[o.id] : false, pending: true }); });
 
-    return { d, lancamentos, lista };
+    const cxBase = d.caixinha || { total: 0, movimentos: [] };
+    const cxDel = new Set(S.queue.filter((o) => o.op === 'deleteCaixinha').map((o) => o.data.id));
+    const cxPend = S.queue.filter((o) => o.op === 'addCaixinha').map((o) => ({ id: o.id, data: o.data.data, mes: monthStartIso(fromIso(o.data.data)), mov: o.data.mov, valor: o.data.valor, obs: o.data.obs, pending: true }));
+    const sinal = (m) => (m.mov === 'Resgatar' ? -1 : 1);
+    const removidos = cxBase.movimentos.filter((m) => cxDel.has(m.id));
+    const caixinha = {
+      total: Math.round((cxBase.total + cxPend.reduce((t, m) => t + sinal(m) * m.valor, 0) - removidos.reduce((t, m) => t + sinal(m) * m.valor, 0)) * 100) / 100,
+      movimentos: cxPend.concat(cxBase.movimentos.filter((m) => !cxDel.has(m.id))).sort((a, b) => (a.data < b.data ? 1 : a.data > b.data ? -1 : 0)),
+      ajuste: (mes) => cxPend.filter((m) => m.mes === mes && m.mov !== 'Saldo inicial').reduce((t, m) => t + sinal(m) * m.valor, 0) - removidos.filter((m) => m.mes === mes && m.mov !== 'Saldo inicial').reduce((t, m) => t + sinal(m) * m.valor, 0)
+    };
+
+    return { d, lancamentos, lista, caixinha };
   }
 
   /* ================= mês escolhido ================= */
@@ -129,7 +141,12 @@
 
   function dadosMes(d) {
     const m = mesAtivo(d);
-    if (!m || m === d.mes) return { mes: d.mes, resumo: d.resumo, categorias: d.categorias || [], separadas: d.separadas || [], itens: d.itens || [], atual: true };
+    if (!m || m === d.mes) {
+      let resumo = d.resumo;
+      const aj = resumo ? view().caixinha.ajuste(d.mes) : 0;
+      if (aj) resumo = Object.assign({}, resumo, { saldo: resumo.saldo - aj, guardadoMes: (resumo.guardadoMes || 0) + Math.max(0, aj), resgatadoMes: (resumo.resgatadoMes || 0) + Math.max(0, -aj) });
+      return { mes: d.mes, resumo, categorias: d.categorias || [], separadas: d.separadas || [], itens: d.itens || [], atual: true };
+    }
     const c = S.porMes[m];
     return c && c.data ? Object.assign({}, c.data, { atual: false }) : { mes: m, carregando: true, atual: false, categorias: [], separadas: [], itens: [] };
   }
@@ -258,6 +275,8 @@
     } finally {
       S.syncing = false;
       render();
+      const st = document.getElementById('sheet-title');
+      if (st && st.textContent === 'Caixinha' && !document.getElementById('f-cx')) telaCaixinha();
     }
   }
 
@@ -348,7 +367,7 @@
   }
 
   function telaInicio() {
-    const { d, lancamentos } = view();
+    const { d, lancamentos, caixinha } = view();
     if (!d.resumo) return topBar() + pendingBanner() + loading();
     const dm = dadosMes(d);
     const chips = mesChips(d, lancamentos);
@@ -361,13 +380,15 @@
     const doMes = lancamentos.filter((l) => l.mes === dm.mes);
     const recentes = doMes.slice(0, 5);
     const sep = (dm.separadas || []).filter((g) => g.valor > 0);
+    const guardLiq = Math.round(((r.guardadoMes || 0) - (r.resgatadoMes || 0)) * 100) / 100;
+    const cxSub = guardLiq > 0 ? `${brl(guardLiq)} guardados em ${monthName(dm.mes)}` : guardLiq < 0 ? `${brl(-guardLiq)} resgatados em ${monthName(dm.mes)}` : `Nada guardado em ${monthName(dm.mes)}`;
     return `${topBar()}${pendingBanner()}${chips}
     <div class="home"><div class="home-main">
     <section class="balance" aria-label="Saldo do mês">
       <div class="balance-head"><span>Saldo de ${mesLabel(dm.mes, d.mes)}</span><span class="pill">${chip}</span></div>
       <span class="balance-value${r.saldo < 0 ? ' neg' : ''}">${brl(r.saldo)}</span>
       <div class="bar${usado > 0.9 ? ' warn' : ''}" role="img" aria-label="${pct(usado)} da renda comprometida"><i style="width:${(usado * 100).toFixed(1)}%"></i></div>
-      <div class="balance-foot"><span>Receitas <strong>${brl(r.receitas)}</strong></span><span>Despesas <strong>${brl(r.despesas)}</strong></span></div>
+      <div class="balance-foot"><span>Receitas <strong>${brl(r.receitas)}</strong></span><span>Despesas <strong>${brl(r.despesas)}</strong></span>${guardLiq ? `<span>${guardLiq > 0 ? 'Guardado' : 'Resgatado'} <strong>${brl(Math.abs(guardLiq))}</strong></span>` : ''}</div>
     </section>
     ${dm.atual ? `<div class="actions">
       <button class="action main" data-act="novo-lanc"><span>${I.plus(24)}</span>Lançar</button>
@@ -381,6 +402,7 @@
       <div class="tile"><b>Fatura Nubank</b><strong>${brl(r.fatura)}</strong></div>
       <div class="tile yellow"><b>Maior gasto</b><span><strong>${top ? esc(top.nome) : '—'}</strong>${top ? `<br><em>${brl(top.valor)}, ${pct(r.despesas ? top.valor / r.despesas : 0)}</em>` : ''}</span></div>
     </div>
+    <div class="card cx-card"><button class="row" data-act="caixinha"><span class="row-icon lime">${I.piggy(20)}</span><span class="row-main"><span>Caixinha</span><small>${cxSub}</small></span><span class="row-value">${brl(caixinha.total)}<small>guardado no total</small></span></button></div>
     ${sep.length ? `<div class="section-head"><h2>Despesas separadas</h2><button class="link" data-act="go" data-arg="estatisticas">Detalhar</button></div>
     <div class="card">${sep.map((g) => `<button class="row" data-act="ver-grupo" data-arg="${esc(g.nome)}"><span class="row-icon">${grupoIcon(g.nome)}</span><span class="row-main"><span>${esc(grupoTitulo(g.nome))}</span><small>${grupoDono(g.nome)}${pct(r.despesas ? g.valor / r.despesas : 0)} das despesas</small></span><span class="row-value">${brl(g.valor)}</span></button>`).join('')}</div>` : ''}
     ${dm.atual ? `<div class="tip">${I.bulb()}<p>${dica(r)}</p></div>` : ''}
@@ -757,6 +779,54 @@
     });
   }
 
+  /* ================= caixinha ================= */
+  const MOV_LABEL = { 'Guardar': 'Guardado', 'Resgatar': 'Resgatado', 'Saldo inicial': 'Já estava guardado' };
+
+  function telaCaixinha() {
+    const { caixinha } = view();
+    const movs = caixinha.movimentos;
+    openSheet('Caixinha', `
+      <div class="cx-total"><small>Guardado no total</small><strong>${brl(caixinha.total)}</strong><p class="hint">Dinheiro guardado não conta como despesa. Ele só sai do saldo do mês em que você guardou, porque deixa de estar disponível para gastar.</p></div>
+      <div class="cx-actions"><button class="btn primary" data-act="cx-form" data-arg="Guardar">Guardar</button><button class="btn ghost" data-act="cx-form" data-arg="Resgatar">Resgatar</button></div>
+      ${movs.length ? `<div class="card">${movs.map((m) => `<div class="row"><span class="row-main"><span>${m.pending ? '<i class="pending-dot" aria-label="aguardando envio"></i>' : ''}${esc(MOV_LABEL[m.mov] || m.mov)}</span><small>${esc([m.data ? m.data.slice(8, 10) + '/' + m.data.slice(5, 7) + '/' + m.data.slice(0, 4) : '', m.obs].filter(Boolean).join(', '))}</small></span><span class="row-value${m.mov === 'Resgatar' ? ' neg' : ''}">${m.mov === 'Resgatar' ? '−' : '+'}${brl(m.valor)}</span><button class="icon-btn sm" data-act="cx-del" data-id="${esc(m.id)}" aria-label="Apagar este movimento">${I.close(16)}</button></div>`).join('')}</div>` : `<div class="empty">Nada registrado ainda. Se você já tem dinheiro na caixinha, registre como “Já estava guardado”.<br><button class="btn dark" data-act="cx-form" data-arg="Saldo inicial">Registrar o que já tenho</button></div>`}`);
+  }
+
+  function formCaixinha(mov) {
+    const OPC = ['Guardar', 'Resgatar', 'Já tinha'];
+    const toMov = (o) => (o === 'Já tinha' ? 'Saldo inicial' : o);
+    const sel = mov === 'Saldo inicial' ? 'Já tinha' : mov || 'Guardar';
+    openSheet('Caixinha', `
+      <form id="f-cx" class="setup-form" novalidate>
+        <div class="field">${segOf('mov', OPC, sel)}</div>
+        <label class="money"><span>R$</span><span class="sr">Valor</span><input id="cx-valor" inputmode="decimal" autocomplete="off" placeholder="0,00"></label>
+        <p class="hint" id="cx-hint"></p>
+        <div class="field" id="cx-data-f"><label for="cx-data">Data</label><input class="input" type="date" id="cx-data" value="${todayIso()}"></div>
+        <div class="field"><label for="cx-obs">Observações</label><input class="input" id="cx-obs" autocomplete="off" placeholder="Ex.: caixinha Nubank, reserva"></div>
+        <p class="error" hidden></p>
+        <button class="btn primary block" type="submit">Salvar</button>
+      </form>`, (root) => {
+      const HINT = {
+        'Guardar': 'Sai do saldo deste mês, mas não entra nas despesas.',
+        'Resgatar': 'Volta para o saldo do mês e sai do total guardado.',
+        'Já tinha': 'Só entra no total guardado. Não mexe no saldo de nenhum mês.'
+      };
+      const upd = () => { const o = picked(root, 'mov') || 'Guardar'; root.querySelector('#cx-hint').textContent = HINT[o]; root.querySelector('#cx-data-f').hidden = o === 'Já tinha'; };
+      upd();
+      root.addEventListener('chip', upd);
+      setTimeout(() => root.querySelector('#cx-valor').focus(), 250);
+      root.querySelector('#f-cx').addEventListener('submit', (e) => {
+        e.preventDefault();
+        const v = parseMoney(root.querySelector('#cx-valor').value);
+        if (!(v > 0)) return showError(root, 'Digite o valor.');
+        const m = toMov(picked(root, 'mov') || 'Guardar');
+        if (m === 'Resgatar' && v > view().caixinha.total + 0.001) return showError(root, `Na caixinha há ${brl(view().caixinha.total)}. Confira o valor.`);
+        enqueue('addCaixinha', { mov: m, valor: v, data: m === 'Saldo inicial' ? todayIso() : root.querySelector('#cx-data').value || todayIso(), obs: root.querySelector('#cx-obs').value.trim() }, uid('C'));
+        telaCaixinha();
+        toast(m === 'Resgatar' ? 'Resgate registrado' : 'Guardado na caixinha');
+      });
+    });
+  }
+
   function formItem() {
     const { lista } = view();
     const cats = Array.from(new Set(lista.map((i) => i.categoria).filter(Boolean)));
@@ -936,6 +1006,15 @@
         LS.set('queue', S.queue); closeSheet(); render(); toast('Lançamento cancelado');
         break;
       case 'settings': telaConfig(); break;
+      case 'caixinha': telaCaixinha(); break;
+      case 'cx-form': formCaixinha(arg); break;
+      case 'cx-del': {
+        if (t.dataset.confirm !== '1') { t.dataset.confirm = '1'; t.classList.add('confirm'); t.setAttribute('aria-label', 'Toque de novo para apagar'); toast('Toque no X de novo para apagar'); break; }
+        const pend = S.queue.find((o) => o.op === 'addCaixinha' && o.id === id);
+        if (pend) { S.queue = S.queue.filter((o) => o !== pend); LS.set('queue', S.queue); render(); } else enqueue('deleteCaixinha', { id });
+        telaCaixinha();
+        break;
+      }
       case 'save-name': {
         const n = document.getElementById('c-nome').value.trim();
         S.cfg = Object.assign({}, S.cfg, { nome: n }); LS.set('cfg', S.cfg); closeSheet(); render(); toast('Nome salvo');

@@ -214,3 +214,14 @@ textarea.input { padding: 14px 16px; min-height: 80px; resize: vertical; }
 .xp-empty { padding: 10px 0; }
 @media (prefers-reduced-motion: reduce) { .xp-chev { transition: none; } }
 @media (min-width: 960px) { .xp-body { margin-left: 52px; } }
+
+/* caixinha (v1.3) */
+.row-icon.lime { background: var(--lime); color: var(--ink); }
+.cx-total { display: flex; flex-direction: column; gap: 6px; background: var(--ink); color: #fff; border-radius: 24px; padding: 20px; }
+.cx-total small { color: var(--muted-dark); font-size: 13px; }
+.cx-total strong { font-family: var(--display); font-size: 40px; font-weight: 700; line-height: 1.05; }
+.cx-total .hint { color: var(--muted-dark); }
+.cx-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.row-value.neg { color: var(--ink-2); }
+.icon-btn.sm { width: 36px; height: 36px; flex-shrink: 0; }
+.icon-btn.confirm { background: var(--orange); border-color: var(--orange); color: var(--ink); }
