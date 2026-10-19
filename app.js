@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '1.3.0';
+  const VERSION = '1.4.0';
   const LOCK_AFTER_MS = 3 * 60 * 1000;
 
   /* ================= armazenamento local ================= */
@@ -200,14 +200,32 @@
       descricao: l.descricao, categoria: l.categoria || 'Sem categoria', tipo: l.tipo, forma: l.forma,
       valor: Number(l.valor) || 0, minhaParte: Number(l.minhaParte) || Number(l.valor) || 0
     }));
-    return (dm.itens || []).concat(lanc);
+    // valores de conta fixa ainda não enviados para a planilha
+    const ajustes = {};
+    S.queue.forEach((o) => {
+      if ((o.op === 'setFixaMes' || o.op === 'deleteFixaMes') && o.data.mes === dm.mes) ajustes[o.data.descricao.toLowerCase()] = o;
+    });
+    const fixas = (dm.itens || []).map((it) => {
+      const base = Object.assign({}, it, { mes: dm.mes });
+      const o = it.origem === 'Fixa' && ajustes[it.descricao.toLowerCase()];
+      if (!o) return base;
+      const casa = it.tipo === 'Casa';
+      const parte = (d) => (casa ? d * ((S.data && S.data.config && S.data.config.minhaParteCasa) || 0.5) : d);
+      if (o.op === 'setFixaMes') return Object.assign(base, { valor: o.data.valor, minhaParte: parte(o.data.valor), doMes: true, padrao: it.doMes ? it.padrao : it.valor, pending: true });
+      if (it.doMes && it.padrao != null) return Object.assign(base, { valor: it.padrao, minhaParte: parte(it.padrao), doMes: false, padrao: null, pending: true });
+      return base;
+    });
+    return fixas.concat(lanc);
   }
 
   function itemRow(it) {
-    const sub = [it.origem === 'Lançamento' ? (it.data ? it.data.slice(8, 10) + '/' + it.data.slice(5, 7) : 'Lançamento') : it.origem, it.categoria, it.forma].filter(Boolean).join(', ');
+    const orig = it.origem === 'Lançamento' ? (it.data ? it.data.slice(8, 10) + '/' + it.data.slice(5, 7) : 'Lançamento') : it.origem === 'Fixa' && it.doMes ? 'Valor de ' + MESES[fromIso(it.mes).getMonth()] : it.origem;
+    const sub = [orig, it.categoria, it.forma].filter(Boolean).join(', ');
     const parte = Math.abs(it.minhaParte - it.valor) > 0.009 ? `<small>de ${brl(it.valor)}</small>` : '';
     const inner = `<span class="row-main"><span>${it.pending ? '<i class="pending-dot" aria-label="aguardando envio"></i>' : ''}${esc(it.descricao)}</span><small>${esc(sub)}</small></span><span class="row-value">${brl(it.minhaParte)}${parte}</span>`;
-    return it.origem === 'Lançamento' ? `<button class="row" data-act="lanc" data-id="${esc(it.id)}">${inner}</button>` : `<div class="row">${inner}</div>`;
+    if (it.origem === 'Lançamento') return `<button class="row" data-act="lanc" data-id="${esc(it.id)}">${inner}</button>`;
+    if (it.origem === 'Fixa' && it.mes) return `<button class="row" data-act="fixa" data-id="${esc(it.descricao)}" data-arg="${esc(it.mes)}">${inner}</button>`;
+    return `<div class="row">${inner}</div>`;
   }
 
   function bloco(key, icon, titulo, sub, valor, itens) {
@@ -827,6 +845,35 @@
     });
   }
 
+  /* ================= conta fixa com valor do mês ================= */
+  function formFixa(desc, mes) {
+    const { d, lancamentos } = view();
+    const dm = mes === d.mes ? { mes, itens: d.itens || [] } : (S.porMes[mes] && S.porMes[mes].data) || { mes, itens: [] };
+    const it = itensDoMes(dm, lancamentos).find((i) => i.origem === 'Fixa' && i.descricao === desc);
+    if (!it) return;
+    const nomeMes = monthName(mes);
+    const todoMes = it.doMes ? it.padrao : it.valor;
+    openSheet(esc(desc), `
+      <form id="f-fx" class="setup-form" novalidate>
+        <p class="hint">Valor da conta em <b>${esc(nomeMes)}</b>. Só este mês muda; os outros continuam com ${todoMes != null ? brl(todoMes) : 'o valor de todo mês'}.</p>
+        <label class="money"><span>R$</span><span class="sr">Valor total da conta</span><input id="fx-valor" inputmode="decimal" autocomplete="off" value="${brl(it.valor).replace('R$', '').trim()}"></label>
+        ${it.tipo === 'Casa' ? '<p class="hint">Digite o valor total da conta. A sua parte é calculada como nas outras contas da casa.</p>' : ''}
+        <p class="error" hidden></p>
+        <button class="btn primary block" type="submit">Salvar valor de ${esc(MESES[fromIso(mes).getMonth()])}</button>
+        ${it.doMes ? `<button class="btn ghost block" type="button" data-act="fixa-del" data-id="${esc(desc)}" data-arg="${esc(mes)}">Voltar ao valor de todo mês${todoMes != null ? ' (' + brl(todoMes) + ')' : ''}</button>` : ''}
+      </form>`, (root) => {
+      setTimeout(() => { const i = root.querySelector('#fx-valor'); i.focus(); i.select(); }, 250);
+      root.querySelector('#f-fx').addEventListener('submit', (e) => {
+        e.preventDefault();
+        const v = parseMoney(root.querySelector('#fx-valor').value);
+        if (!(v > 0)) return showError(root, 'Digite o valor da conta.');
+        enqueue('setFixaMes', { descricao: desc, mes, valor: v }, uid('F'));
+        closeSheet();
+        toast(desc + ' de ' + MESES[fromIso(mes).getMonth()] + ': ' + brl(v));
+      });
+    });
+  }
+
   function formItem() {
     const { lista } = view();
     const cats = Array.from(new Set(lista.map((i) => i.categoria).filter(Boolean)));
@@ -978,6 +1025,11 @@
       case 'novo-mercado': formMercado(); break;
       case 'novo-item': formItem(); break;
       case 'lanc': detalheLanc(id); break;
+      case 'fixa': formFixa(id, arg); break;
+      case 'fixa-del':
+        enqueue('deleteFixaMes', { descricao: id, mes: arg }, uid('F'));
+        closeSheet(); toast(id + ' volta ao valor de todo mês');
+        break;
       case 'close-sheet': closeSheet(); break;
       case 'mes': escolherMes(arg); break;
       case 'filtro-tipo': S.filtro.tipo = arg; render(); break;
