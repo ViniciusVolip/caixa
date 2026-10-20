@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '1.4.0';
+  const VERSION = '1.5.0';
   const LOCK_AFTER_MS = 3 * 60 * 1000;
 
   /* ================= armazenamento local ================= */
@@ -58,7 +58,7 @@
   const uid = (p) => (p || '') + Array.from(crypto.getRandomValues(new Uint8Array(4))).map((b) => b.toString(16).padStart(2, '0')).join('');
   const parseMoney = (s) => {
     let v = String(s || '').replace(/\s|R\$/g, '');
-    if (v.includes(',')) v = v.replace(/\./g, '').replace(',', '.');
+    if (v.includes(',') || /^\d{1,3}(\.\d{3})+$/.test(v)) v = v.replace(/\./g, '').replace(',', '.');
     const n = Number(v);
     return isFinite(n) ? Math.round(n * 1000) / 1000 : NaN;
   };
@@ -109,7 +109,15 @@
       if (o.op === 'addAbastecimento') pend.push({ id: 'AB-' + o.id, data: o.data.data, mes: monthStartIso(fromIso(o.data.data)), descricao: 'Abastecimento posto ' + o.data.posto, categoria: 'Transporte', tipo: 'Pessoal', forma: o.data.forma, valor: o.data.total, minhaParte: o.data.total, pending: true });
       if (o.op === 'addMercado') pend.push({ id: 'MK-' + o.id, data: o.data.data, mes: monthStartIso(fromIso(o.data.data)), descricao: 'Mercado ' + o.data.mercado, categoria: o.data.tipo === 'Casa' ? 'Compras da casa' : 'Alimentação', tipo: o.data.tipo, forma: o.data.forma, valor: o.data.valor, minhaParte: o.data.tipo === 'Casa' ? o.data.valor * 0.5 : o.data.valor, pending: true });
     });
-    const lancamentos = pend.concat((d.lancamentos || []).filter((l) => !deletes.has(l.id)))
+    const edits = {};
+    S.queue.forEach((o) => { if (o.op === 'updateLancamento') edits[o.data.id] = o.data; });
+    const parteCasa = (d.config && d.config.minhaParteCasa) || 0.5;
+    const aplica = (l) => {
+      const e = edits[l.id];
+      if (!e) return l;
+      return Object.assign({}, l, e, { minhaParte: e.tipo === 'Casa' ? e.valor * parteCasa : e.valor, pagoCom: e.forma === 'Nubank' ? 'Fatura Nubank' : l.pagoCom, pending: true });
+    };
+    const lancamentos = pend.concat((d.lancamentos || []).filter((l) => !deletes.has(l.id)).map(aplica))
       .sort((a, b) => (a.data < b.data ? 1 : a.data > b.data ? -1 : 0));
 
     const toggles = {};
@@ -129,6 +137,16 @@
     };
 
     return { d, lancamentos, lista, caixinha };
+  }
+
+  /* ================= fatura do Nubank ================= */
+  const vencNubank = () => Number((S.data && S.data.config && S.data.config.vencNubank) || 20);
+  const fechNubank = () => Number(LS.get('fechNubank', 0)) || Math.max(1, vencNubank() - 7);
+  /** Mês da fatura em que cai uma compra feita no dia informado. */
+  function mesFatura(dataIso) {
+    const dt = fromIso(dataIso || todayIso());
+    const prox = dt.getDate() >= fechNubank() ? 1 : 0;
+    return monthStartIso(new Date(dt.getFullYear(), dt.getMonth() + prox, 1));
   }
 
   /* ================= mês escolhido ================= */
@@ -166,6 +184,7 @@
       if (!(c && c.data) && S.mesSel === m) S.mesSel = null;
     }
     render();
+    if (document.querySelector('[data-sheet="fatura"]')) telaFatura();
   }
 
   function escolherMes(m) {
@@ -295,6 +314,7 @@
       render();
       const st = document.getElementById('sheet-title');
       if (st && st.textContent === 'Caixinha' && !document.getElementById('f-cx')) telaCaixinha();
+      if (document.querySelector('[data-sheet="fatura"]')) telaFatura();
     }
   }
 
@@ -417,7 +437,7 @@
     <div class="tiles">
       ${sobraTile('Sobra do pagamento', r.sobraPagamento)}
       ${sobraTile('Sobra do vale', r.sobraVale)}
-      <div class="tile"><b>Fatura Nubank</b><strong>${brl(r.fatura)}</strong></div>
+      <button class="tile tile-btn" data-act="fatura"><b>Fatura Nubank</b><span><strong>${brl(r.fatura)}</strong><br><em>vence dia ${vencNubank()}, toque para ver</em></span></button>
       <div class="tile yellow"><b>Maior gasto</b><span><strong>${top ? esc(top.nome) : '—'}</strong>${top ? `<br><em>${brl(top.valor)}, ${pct(r.despesas ? top.valor / r.despesas : 0)}</em>` : ''}</span></div>
     </div>
     <div class="card cx-card"><button class="row" data-act="caixinha"><span class="row-icon lime">${I.piggy(20)}</span><span class="row-main"><span>Caixinha</span><small>${cxSub}</small></span><span class="row-value">${brl(caixinha.total)}<small>guardado no total</small></span></button></div>
@@ -643,41 +663,70 @@
     };
   }
 
-  function formLancamento() {
+  function formLancamento(opts) {
+    opts = opts || {};
     const L = cfgLists();
     const { lancamentos } = view();
+    const ed = opts.lanc || null;
     const descs = Array.from(new Set(lancamentos.map((l) => l.descricao))).slice(0, 60);
-    const agora = new Date();
-    const mesAtual = monthStartIso(agora);
-    const mesProx = monthStartIso(new Date(agora.getFullYear(), agora.getMonth() + 1, 1));
-    openSheet('Novo lançamento', `
+    const ini = ed ? ed : { forma: opts.forma || 'Pix', tipo: 'Pessoal', pagoPor: 'Eu', data: todayIso(), categoria: '', descricao: '', obs: '' };
+    if (!ed && opts.forma === 'Nubank') ini.mes = mesFatura(ini.data);
+    openSheet(ed ? 'Editar lançamento' : opts.forma === 'Nubank' ? 'Compra no cartão' : 'Novo lançamento', `
       <form id="f-lanc" class="setup-form" novalidate>
-        <label class="money"><span>R$</span><span class="sr">Valor</span><input id="f-valor" inputmode="decimal" autocomplete="off" placeholder="0,00" enterkeyhint="next"></label>
-        <div class="field"><label for="f-desc">Descrição</label><input class="input" id="f-desc" list="f-desc-list" autocomplete="off" placeholder="Ex.: Almoço, Uber, Farmácia"><datalist id="f-desc-list">${descs.map((x) => `<option value="${esc(x)}">`).join('')}</datalist></div>
-        <div class="field"><span class="label">Categoria</span>${chips('categoria', L.categorias, '')}</div>
-        <div class="field"><span class="label">Forma de pagamento</span>${chips('forma', L.formas, 'Pix')}</div>
-        <div class="field"><span class="label">É um gasto</span>${segOf('tipo', ['Pessoal', 'Casa'], 'Pessoal')}</div>
-        <div class="field" id="f-pagopor" hidden><span class="label">Quem pagou</span>${chips('pagoPor', L.pagoPor, 'Eu')}<p class="hint">Gastos da casa são divididos pelo percentual da planilha.</p></div>
+        <label class="money"><span>R$</span><span class="sr">Valor</span><input id="f-valor" inputmode="decimal" autocomplete="off" placeholder="0,00" enterkeyhint="next" value="${ed ? brl(ed.valor).replace('R$', '').trim() : ''}"></label>
+        <div class="field"><label for="f-desc">Descrição</label><input class="input" id="f-desc" list="f-desc-list" autocomplete="off" placeholder="Ex.: Almoço, Uber, Farmácia" value="${esc(ini.descricao)}"><datalist id="f-desc-list">${descs.map((x) => `<option value="${esc(x)}">`).join('')}</datalist></div>
+        <div class="field"><span class="label">Categoria</span>${chips('categoria', L.categorias, ini.categoria)}</div>
+        <div class="field"><span class="label">Forma de pagamento</span>${chips('forma', L.formas, ini.forma)}</div>
+        <div class="field"><span class="label">É um gasto</span>${segOf('tipo', ['Pessoal', 'Casa'], ini.tipo || 'Pessoal')}</div>
+        <div class="field" id="f-pagopor" hidden><span class="label">Quem pagou</span>${chips('pagoPor', L.pagoPor, ini.pagoPor || 'Eu')}<p class="hint">Gastos da casa são divididos pelo percentual da planilha.</p></div>
         <div class="grid-2">
-          <div class="field"><label for="f-data">Data</label><input class="input" type="date" id="f-data" value="${todayIso()}"></div>
-          <div class="field"><span class="label">Entra no mês</span>${chips('mes', [mesAtual, mesProx], mesAtual, monthShort)}</div>
+          <div class="field"><label for="f-data">Data da compra</label><input class="input" type="date" id="f-data" value="${ini.data || todayIso()}"></div>
+          <div class="field"><span class="label">Entra no mês</span><div id="f-mes-box"></div></div>
         </div>
-        <p class="hint" id="f-nubank-hint" hidden>No Nubank, escolha o mês da fatura em que a compra vai cair.</p>
-        <div class="field"><label for="f-obs">Observações</label><input class="input" id="f-obs" autocomplete="off"></div>
+        <p class="hint" id="f-nubank-hint" hidden></p>
+        <div class="field"><label for="f-obs">Observações</label><input class="input" id="f-obs" autocomplete="off" value="${esc(ini.obs || '')}"></div>
         <p class="error" hidden></p>
-        <button class="btn primary block" type="submit">Salvar lançamento</button>
+        <button class="btn primary block" type="submit">${ed ? 'Salvar alterações' : 'Salvar lançamento'}</button>
+        ${ed ? `<button class="btn ghost block" type="button" data-act="lanc" data-id="${esc(ed.id)}">Cancelar</button>` : ''}
       </form>`, (root) => {
       const valor = root.querySelector('#f-valor');
-      setTimeout(() => valor.focus(), 250);
+      const dataEl = root.querySelector('#f-data');
+      let mesManual = !!ed;
+      let mesSel = ini.mes || monthStartIso(fromIso(ini.data || todayIso()));
+      const pintaMes = () => {
+        const dIso = dataEl.value || todayIso();
+        const base = monthStartIso(fromIso(dIso));
+        const prox = monthStartIso(new Date(fromIso(base).getFullYear(), fromIso(base).getMonth() + 1, 1));
+        const nub = picked(root, 'forma') === 'Nubank';
+        if (!mesManual) mesSel = nub ? mesFatura(dIso) : base;
+        const opcoes = Array.from(new Set([base, prox, mesSel])).sort();
+        root.querySelector('#f-mes-box').innerHTML = chips('mes', opcoes, mesSel, monthShort);
+        const h = root.querySelector('#f-nubank-hint');
+        h.hidden = !nub;
+        if (nub) {
+          const mf = mesFatura(dIso);
+          h.textContent = `A fatura fecha no dia ${fechNubank()}. Compra feita em ${dIso.slice(8, 10)}/${dIso.slice(5, 7)} cai na fatura de ${monthName(mf)}, que vence dia ${vencNubank()}.` + (mesSel !== mf ? ' Você escolheu outro mês.' : '');
+        }
+      };
+      pintaMes();
+      if (!ed) setTimeout(() => valor.focus(), 250);
+      dataEl.addEventListener('change', () => { mesManual = false; pintaMes(); });
       root.querySelector('#f-desc').addEventListener('change', (e) => {
+        if (ed) return;
         const prev = lancamentos.find((l) => l.descricao.toLowerCase() === e.target.value.trim().toLowerCase());
         if (!prev) return;
         selectChip(root, 'categoria', prev.categoria);
         selectChip(root, 'forma', prev.forma);
         selectChip(root, 'tipo', prev.tipo);
-        syncLancForm(root);
+        syncLancForm(root); pintaMes();
       });
-      root.addEventListener('chip', () => syncLancForm(root));
+      root.addEventListener('chip', (e) => {
+        if (e.detail === 'mes') { mesManual = true; mesSel = picked(root, 'mes') || mesSel; }
+        if (e.detail === 'forma') mesManual = false;
+        syncLancForm(root);
+        pintaMes();
+      });
+      syncLancForm(root);
       root.querySelector('#f-lanc').addEventListener('submit', (e) => {
         e.preventDefault();
         const v = parseMoney(valor.value);
@@ -687,21 +736,28 @@
         const categoria = picked(root, 'categoria');
         if (!categoria) return showError(root, 'Escolha uma categoria.');
         const tipo = picked(root, 'tipo') || 'Pessoal';
-        enqueue('addLancamento', {
+        const dados = {
           valor: v, descricao: desc, categoria, forma: picked(root, 'forma') || 'Pix', tipo,
           pagoPor: tipo === 'Casa' ? picked(root, 'pagoPor') || 'Eu' : 'Eu',
-          data: root.querySelector('#f-data').value || todayIso(), mes: picked(root, 'mes') || mesAtual,
+          data: dataEl.value || todayIso(), mes: picked(root, 'mes') || mesSel,
           obs: root.querySelector('#f-obs').value.trim()
-        }, uid());
-        closeSheet();
-        toast('Lançamento guardado. Enviando para a planilha…');
+        };
+        if (ed) {
+          const pend = S.queue.find((o) => o.op === 'addLancamento' && o.id === ed.id);
+          if (pend) { pend.data = dados; LS.set('queue', S.queue); render(); sync(); }
+          else enqueue('updateLancamento', Object.assign({ id: ed.id }, dados), uid('E'));
+          toast('Lançamento corrigido');
+        } else {
+          enqueue('addLancamento', dados, uid());
+          toast(dados.forma === 'Nubank' ? `Compra lançada na fatura de ${monthName(dados.mes)}` : 'Lançamento guardado. Enviando para a planilha…');
+        }
+        if (opts.voltar === 'fatura') telaFatura(); else closeSheet();
       });
     });
   }
 
   function syncLancForm(root) {
     root.querySelector('#f-pagopor').hidden = picked(root, 'tipo') !== 'Casa';
-    root.querySelector('#f-nubank-hint').hidden = picked(root, 'forma') !== 'Nubank';
   }
 
   function selectChip(root, group, value) {
@@ -800,13 +856,95 @@
   /* ================= caixinha ================= */
   const MOV_LABEL = { 'Guardar': 'Guardado', 'Resgatar': 'Resgatado', 'Saldo inicial': 'Já estava guardado' };
 
+  /** Agrupa os movimentos pela observação, para separar objetivos como "Poupança Bea". */
+  function cxObjetivos(movs) {
+    const g = {};
+    movs.forEach((m) => {
+      const nome = (m.obs || '').trim() || 'Sem objetivo';
+      const k = nome.toLowerCase();
+      g[k] = g[k] || { nome, total: 0 };
+      g[k].total += (m.mov === 'Resgatar' ? -1 : 1) * m.valor;
+    });
+    return Object.values(g).map((o) => Object.assign(o, { total: Math.round(o.total * 100) / 100 })).filter((o) => Math.abs(o.total) > 0.009).sort((a, b) => b.total - a.total);
+  }
+
+  /** Média do que entrou na caixinha por mês (sem o saldo inicial), nos últimos meses com movimento. */
+  function cxMediaMensal(movs) {
+    const porMes = {};
+    movs.filter((m) => m.mov !== 'Saldo inicial').forEach((m) => { porMes[m.mes] = (porMes[m.mes] || 0) + (m.mov === 'Resgatar' ? -1 : 1) * m.valor; });
+    const ms = Object.keys(porMes).sort().slice(-3);
+    return ms.length ? Math.max(0, Math.round(ms.reduce((t, m) => t + porMes[m], 0) / ms.length * 100) / 100) : 0;
+  }
+
+  const cxPlano = () => Object.assign({ mensal: 0, taxa: 0, meta: 0 }, LS.get('cxPlano', {}) || {});
+
+  /** Saldo projetado mês a mês: juros compostos ao mês + aporte no fim de cada mês. */
+  function cxProjecao(total, mensal, taxaAno, meses) {
+    const r = taxaAno > 0 ? Math.pow(1 + taxaAno / 100, 1 / 12) - 1 : 0;
+    const out = [];
+    let v = total;
+    for (let i = 1; i <= meses; i++) { v = v * (1 + r) + mensal; out.push(Math.round(v * 100) / 100); }
+    return out;
+  }
+
   function telaCaixinha() {
     const { caixinha } = view();
     const movs = caixinha.movimentos;
+    const objs = cxObjetivos(movs);
+    const plano = cxPlano();
+    const mensal = plano.mensal || cxMediaMensal(movs);
+    const proj = cxProjecao(caixinha.total, mensal, plano.taxa, 36);
+    const hoje = fromIso(todayIso());
+    const mesN = (n) => { const x = new Date(hoje.getFullYear(), hoje.getMonth() + n, 1); return MESES[x.getMonth()].slice(0, 3) + '/' + String(x.getFullYear()).slice(2); };
+    let metaTxt = '';
+    if (plano.meta > 0) {
+      if (caixinha.total >= plano.meta) metaTxt = `Meta de ${brl(plano.meta)} já alcançada.`;
+      else { const i = proj.findIndex((v) => v >= plano.meta); metaTxt = i >= 0 ? `Meta de ${brl(plano.meta)} em ${i + 1} ${i ? 'meses' : 'mês'} (${mesN(i + 1)}).` : `Com esse ritmo, a meta de ${brl(plano.meta)} leva mais de 3 anos.`; }
+    }
+    const max12 = Math.max(1, ...proj.slice(0, 12));
+    const barras = proj.slice(0, 12).map((v, i) => `<i style="height:${Math.max(4, v / max12 * 100).toFixed(1)}%" title="${mesN(i + 1)}: ${brl(v)}"></i>`).join('');
+    const projHtml = mensal > 0 ? `
+      <div class="cx-proj-grid">
+        <div><small>em 3 meses</small><strong>${brl(proj[2])}</strong></div>
+        <div><small>em 6 meses</small><strong>${brl(proj[5])}</strong></div>
+        <div><small>em 12 meses</small><strong>${brl(proj[11])}</strong></div>
+      </div>
+      <div class="cx-bars" role="img" aria-label="Projeção dos próximos 12 meses">${barras}</div>
+      <div class="cx-bars-legend"><span>${mesN(1)}</span><span>${mesN(12)}</span></div>
+      <p class="hint">Guardando ${brl(mensal)} por mês${plano.mensal ? '' : ' (sua média recente)'}${plano.taxa ? `, com rendimento de ${String(plano.taxa).replace('.', ',')}% ao ano` : ', sem contar rendimento'}. ${metaTxt}</p>`
+      : `<p class="hint">Diga quanto pretende guardar por mês para ver quanto vai ter em 3, 6 e 12 meses.</p>`;
     openSheet('Caixinha', `
       <div class="cx-total"><small>Guardado no total</small><strong>${brl(caixinha.total)}</strong><p class="hint">Dinheiro guardado não conta como despesa. Ele só sai do saldo do mês em que você guardou, porque deixa de estar disponível para gastar.</p></div>
       <div class="cx-actions"><button class="btn primary" data-act="cx-form" data-arg="Guardar">Guardar</button><button class="btn ghost" data-act="cx-form" data-arg="Resgatar">Resgatar</button></div>
+      ${objs.length > 1 || (objs.length === 1 && objs[0].nome !== 'Sem objetivo') ? `<div class="section-head"><h2>Por objetivo</h2></div><div class="card">${objs.map((o) => `<div class="row"><span class="row-main"><span>${esc(o.nome)}</span><small>${caixinha.total ? pct(o.total / caixinha.total) + ' do total' : ''}</small></span><span class="row-value">${brl(o.total)}</span></div>`).join('')}</div>` : ''}
+      <div class="section-head"><h2>Projeção</h2><button class="link" data-act="cx-plano">${mensal > 0 ? 'Ajustar' : 'Planejar'}</button></div>
+      <div class="card cx-proj">${projHtml}</div>
+      <div class="section-head"><h2>Movimentos</h2></div>
       ${movs.length ? `<div class="card">${movs.map((m) => `<div class="row"><span class="row-main"><span>${m.pending ? '<i class="pending-dot" aria-label="aguardando envio"></i>' : ''}${esc(MOV_LABEL[m.mov] || m.mov)}</span><small>${esc([m.data ? m.data.slice(8, 10) + '/' + m.data.slice(5, 7) + '/' + m.data.slice(0, 4) : '', m.obs].filter(Boolean).join(', '))}</small></span><span class="row-value${m.mov === 'Resgatar' ? ' neg' : ''}">${m.mov === 'Resgatar' ? '−' : '+'}${brl(m.valor)}</span><button class="icon-btn sm" data-act="cx-del" data-id="${esc(m.id)}" aria-label="Apagar este movimento">${I.close(16)}</button></div>`).join('')}</div>` : `<div class="empty">Nada registrado ainda. Se você já tem dinheiro na caixinha, registre como “Já estava guardado”.<br><button class="btn dark" data-act="cx-form" data-arg="Saldo inicial">Registrar o que já tenho</button></div>`}`);
+  }
+
+  function formPlano() {
+    const { caixinha } = view();
+    const p = cxPlano();
+    const media = cxMediaMensal(caixinha.movimentos);
+    const fmt = (v) => (v ? String(v).replace('.', ',') : '');
+    openSheet('Planejar a caixinha', `
+      <form id="f-plano" class="setup-form" novalidate>
+        <div class="field"><label for="pl-mensal">Quanto vou guardar por mês</label><input class="input" id="pl-mensal" inputmode="decimal" placeholder="${media ? fmt(media) : 'Ex.: 500'}" value="${fmt(p.mensal)}"><p class="hint">${media ? `Sua média recente é ${brl(media)}. Deixe vazio para usar a média.` : 'Some tudo o que pretende guardar, por exemplo a Poupança Bea e a reserva.'}</p></div>
+        <div class="field"><label for="pl-taxa">Rendimento ao ano (%)</label><input class="input" id="pl-taxa" inputmode="decimal" placeholder="Ex.: 13" value="${fmt(p.taxa)}"><p class="hint">Opcional. Veja no app do Nubank quanto a caixinha rende por ano. Vazio projeta sem rendimento.</p></div>
+        <div class="field"><label for="pl-meta">Meta (opcional)</label><input class="input" id="pl-meta" inputmode="decimal" placeholder="Ex.: 5.500" value="${fmt(p.meta)}"></div>
+        <p class="error" hidden></p>
+        <button class="btn primary block" type="submit">Ver projeção</button>
+      </form>`, (root) => {
+      root.querySelector('#f-plano').addEventListener('submit', (e) => {
+        e.preventDefault();
+        const num = (id) => parseMoney(root.querySelector(id).value) || 0;
+        const taxa = num('#pl-taxa');
+        if (taxa > 100) return showError(root, 'Confira o rendimento: ele é em % ao ano.');
+        LS.set('cxPlano', { mensal: num('#pl-mensal'), taxa, meta: num('#pl-meta') });
+        telaCaixinha();
+      });
+    });
   }
 
   function formCaixinha(mov) {
@@ -819,7 +957,7 @@
         <label class="money"><span>R$</span><span class="sr">Valor</span><input id="cx-valor" inputmode="decimal" autocomplete="off" placeholder="0,00"></label>
         <p class="hint" id="cx-hint"></p>
         <div class="field" id="cx-data-f"><label for="cx-data">Data</label><input class="input" type="date" id="cx-data" value="${todayIso()}"></div>
-        <div class="field"><label for="cx-obs">Observações</label><input class="input" id="cx-obs" autocomplete="off" placeholder="Ex.: caixinha Nubank, reserva"></div>
+        <div class="field"><label for="cx-obs">Objetivo</label><input class="input" id="cx-obs" list="cx-obs-list" autocomplete="off" placeholder="Ex.: Poupança Bea, Reserva"><datalist id="cx-obs-list">${Array.from(new Set(view().caixinha.movimentos.map((m) => (m.obs || '').trim()).filter(Boolean))).map((o) => `<option value="${esc(o)}">`).join('')}</datalist><p class="hint">Use o mesmo nome sempre que guardar para o mesmo fim. A caixinha mostra quanto há em cada objetivo.</p></div>
         <p class="error" hidden></p>
         <button class="btn primary block" type="submit">Salvar</button>
       </form>`, (root) => {
@@ -841,6 +979,51 @@
         enqueue('addCaixinha', { mov: m, valor: v, data: m === 'Saldo inicial' ? todayIso() : root.querySelector('#cx-data').value || todayIso(), obs: root.querySelector('#cx-obs').value.trim() }, uid('C'));
         telaCaixinha();
         toast(m === 'Resgatar' ? 'Resgate registrado' : 'Guardado na caixinha');
+      });
+    });
+  }
+
+  /* ================= fatura do Nubank ================= */
+  function telaFatura() {
+    const { d, lancamentos } = view();
+    const dm = dadosMes(d);
+    const mes = dm.mes;
+    const meses = mesesLista(d, lancamentos);
+    const chipsMes = `<div class="chips scroll mes-chips" role="group" aria-label="Fatura">${meses.map((m) => `<button class="chip" data-act="fat-mes" data-arg="${m}" aria-pressed="${m === mes}">${monthShort(m)}</button>`).join('')}</div>`;
+    if (dm.carregando) { openSheet('Fatura Nubank', `<div data-sheet="fatura">${chipsMes}<div class="empty">Buscando ${monthName(mes)} na planilha…</div></div>`); return; }
+    const its = itensDoMes(dm, lancamentos).filter((i) => i.grupo === 'Fatura Nubank');
+    const total = its.reduce((t, i) => t + (Number(i.valor) || 0), 0);
+    const parte = its.reduce((t, i) => t + (Number(i.minhaParte) || 0), 0);
+    const lanc = its.filter((i) => i.origem === 'Lançamento').sort((a, b) => (a.data < b.data ? 1 : -1));
+    const fixas = its.filter((i) => i.origem === 'Fixa');
+    const parc = its.filter((i) => i.origem === 'Parcela');
+    const linha = (it) => {
+      const sub = it.origem === 'Lançamento' ? [it.data ? it.data.slice(8, 10) + '/' + it.data.slice(5, 7) : '', it.categoria].filter(Boolean).join(', ')
+        : it.origem === 'Parcela' ? ['Parcela' + (it.parcela ? ' ' + it.parcela : ''), it.categoria].join(', ') : ['Todo mês', it.categoria].join(', ');
+      const inner = `<span class="row-main"><span>${it.pending ? '<i class="pending-dot" aria-label="aguardando envio"></i>' : ''}${esc(it.descricao.replace(/ \(parcela\)$/, ''))}</span><small>${esc(sub)}</small></span><span class="row-value">${brl(it.valor)}</span>`;
+      if (it.origem === 'Lançamento') return `<button class="row" data-act="lanc" data-id="${esc(it.id)}">${inner}</button>`;
+      if (it.origem === 'Fixa') return `<button class="row" data-act="fixa" data-id="${esc(it.descricao)}" data-arg="${esc(mes)}">${inner}</button>`;
+      return `<div class="row">${inner}</div>`;
+    };
+    const venc = `${String(vencNubank()).padStart(2, '0')}/${mes.slice(5, 7)}`;
+    openSheet('Fatura Nubank', `<div data-sheet="fatura">
+      ${chipsMes}
+      <div class="cx-total"><small>Fatura de ${esc(mesLabel(mes, d.mes))}, vence ${venc}</small><strong>${brl(total)}</strong>
+      <p class="hint">${Math.abs(parte - total) > 0.009 ? `Sua parte: ${brl(parte)}. ` : ''}Fecha no dia ${fechNubank()}: compras a partir desse dia vão para a fatura seguinte.</p></div>
+      <div class="cx-actions"><button class="btn primary" data-act="fat-novo">Nova compra</button><button class="btn ghost" data-act="fat-conferir">Conferir</button></div>
+      <div id="fat-conf" hidden class="field"><label for="fat-real">Valor que o app do Nubank mostra</label><input class="input" id="fat-real" inputmode="decimal" placeholder="0,00"><p class="hint" id="fat-dif"></p></div>
+      <div class="section-head"><h2>Compras</h2><small class="hint">${lanc.length} ${lanc.length === 1 ? 'item' : 'itens'}, toque para editar</small></div>
+      <div class="card">${lanc.length ? lanc.map(linha).join('') : '<div class="empty">Nenhuma compra lançada nesta fatura.</div>'}</div>
+      ${parc.length ? `<div class="section-head"><h2>Parcelas</h2></div><div class="card">${parc.map(linha).join('')}</div>` : ''}
+      ${fixas.length ? `<div class="section-head"><h2>Contas fixas no cartão</h2></div><div class="card">${fixas.map(linha).join('')}</div>` : ''}
+    </div>`, (root) => {
+      const inp = root.querySelector('#fat-real');
+      inp.addEventListener('input', () => {
+        const v = parseMoney(inp.value);
+        const dif = Math.round((v - total) * 100) / 100;
+        root.querySelector('#fat-dif').textContent = !(v > 0) ? '' : Math.abs(dif) < 0.01 ? 'Bate certinho com a planilha.'
+          : dif > 0 ? `Faltam ${brl(dif)} em compras na planilha. Procure no app do Nubank o que ainda não foi lançado.`
+          : `A planilha tem ${brl(-dif)} a mais. Veja se alguma compra caiu em outra fatura ou foi lançada duas vezes.`;
       });
     });
   }
@@ -903,6 +1086,7 @@
     if (!l) return;
     const linha = (k, v) => v ? `<div class="row"><span class="row-main"><small>${k}</small><span>${esc(v)}</span></span></div>` : '';
     const auto = /^(AB|MK)-/.test(l.id);
+    const pendAdd = S.queue.some((o) => o.op === 'addLancamento' && o.id === l.id);
     openSheet(esc(l.descricao), `
       <label class="money" style="pointer-events:none"><span>R$</span><input value="${brl(l.valor).replace('R$', '').trim()}" readonly tabindex="-1" aria-label="Valor"></label>
       <div class="card">
@@ -917,8 +1101,9 @@
         ${linha('Observações', l.obs)}
       </div>
       ${l.pending ? '<p class="hint"><span class="pending-dot"></span>Ainda não chegou à planilha. Será enviado quando houver conexão.</p>' : ''}
-      ${auto ? '<p class="hint">Este lançamento foi criado por um registro de abastecimento ou de mercado. Para apagar, use a planilha.</p>'
-        : `<button class="btn danger block" data-act="${l.pending ? 'cancel-pend' : 'delete-lanc'}" data-id="${esc(l.id)}">${l.pending ? 'Cancelar este lançamento' : 'Apagar lançamento'}</button>`}`);
+      ${auto ? '<p class="hint">Este lançamento foi criado por um registro de abastecimento ou de mercado. Para mudar ou apagar, use a planilha.</p>'
+        : `<button class="btn dark block" data-act="edit-lanc" data-id="${esc(l.id)}">Editar</button>
+        <button class="btn danger block" data-act="${pendAdd ? 'cancel-pend' : 'delete-lanc'}" data-id="${esc(l.id)}">${pendAdd ? 'Cancelar este lançamento' : 'Apagar lançamento'}</button>`}`);
   }
 
   function telaConfig() {
@@ -927,6 +1112,8 @@
     openSheet('Configurações', `
       <div class="field"><label for="c-nome">Seu nome</label><input class="input" id="c-nome" value="${esc((S.cfg && S.cfg.nome) || '')}"></div>
       <button class="btn dark block" data-act="save-name">Salvar nome</button>
+      <div class="field"><label for="c-fech">Dia em que a fatura do Nubank fecha</label><input class="input" id="c-fech" inputmode="numeric" value="${fechNubank()}"><p class="hint">Vence dia ${vencNubank()}. Compras a partir do dia de fechamento entram na fatura do mês seguinte. Confira no app do Nubank.</p></div>
+      <button class="btn ghost block" data-act="save-fech">Salvar dia de fechamento</button>
       <div class="card">
         <div class="row"><span class="row-main"><small>Última sincronização</small><span>${quando}</span></span></div>
         <div class="row"><span class="row-main"><small>Aguardando envio</small><span>${S.queue.length} item(ns)</span></span></div>
@@ -1026,6 +1213,11 @@
       case 'novo-item': formItem(); break;
       case 'lanc': detalheLanc(id); break;
       case 'fixa': formFixa(id, arg); break;
+      case 'fatura': telaFatura(); break;
+      case 'fat-mes': escolherMes(arg); telaFatura(); break;
+      case 'fat-novo': formLancamento({ forma: 'Nubank', voltar: 'fatura' }); break;
+      case 'fat-conferir': { const c = document.getElementById('fat-conf'); c.hidden = !c.hidden; if (!c.hidden) document.getElementById('fat-real').focus(); break; }
+      case 'edit-lanc': { const l = view().lancamentos.find((x) => x.id === id); if (l) formLancamento({ lanc: l }); break; }
       case 'fixa-del':
         enqueue('deleteFixaMes', { descricao: id, mes: arg }, uid('F'));
         closeSheet(); toast(id + ' volta ao valor de todo mês');
@@ -1060,6 +1252,13 @@
       case 'settings': telaConfig(); break;
       case 'caixinha': telaCaixinha(); break;
       case 'cx-form': formCaixinha(arg); break;
+      case 'cx-plano': formPlano(); break;
+      case 'save-fech': {
+        const n = Math.round(Number(document.getElementById('c-fech').value));
+        if (!(n >= 1 && n <= 31)) { toast('Digite um dia entre 1 e 31'); break; }
+        LS.set('fechNubank', n); closeSheet(); render(); toast('Fechamento da fatura: dia ' + n);
+        break;
+      }
       case 'cx-del': {
         if (t.dataset.confirm !== '1') { t.dataset.confirm = '1'; t.classList.add('confirm'); t.setAttribute('aria-label', 'Toque de novo para apagar'); toast('Toque no X de novo para apagar'); break; }
         const pend = S.queue.find((o) => o.op === 'addCaixinha' && o.id === id);

@@ -225,3 +225,18 @@ textarea.input { padding: 14px 16px; min-height: 80px; resize: vertical; }
 .row-value.neg { color: var(--ink-2); }
 .icon-btn.sm { width: 36px; height: 36px; flex-shrink: 0; }
 .icon-btn.confirm { background: var(--orange); border-color: var(--orange); color: var(--ink); }
+
+/* v1.5: fatura e projeção da caixinha */
+.tile-btn { cursor: pointer; color: inherit; font: inherit; }
+.tile-btn:active { transform: scale(.98); }
+.cx-proj { padding: 16px; }
+.cx-proj-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.cx-proj-grid div { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.cx-proj-grid small { font-size: 12px; opacity: .7; }
+.cx-proj-grid strong { font-family: var(--display); font-size: 15px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cx-bars { display: flex; align-items: flex-end; gap: 4px; height: 72px; margin-top: 16px; }
+.cx-bars i { flex: 1; background: var(--lime); border-radius: 6px 6px 2px 2px; min-height: 4px; }
+.cx-bars-legend { display: flex; justify-content: space-between; font-size: 11px; opacity: .6; margin-top: 4px; }
+.cx-proj .hint { margin: 12px 0 0; }
+[data-sheet] { display: flex; flex-direction: column; gap: 16px; }
+[data-sheet] .section-head { margin: 4px 0 -6px; }

@@ -1,4 +1,4 @@
-const CACHE = 'caixa-v1.4.0';
+const CACHE = 'caixa-v1.5.0';
 const SHELL = ['./', 'index.html', 'styles.css', 'desktop.css', 'app.js', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png'];
 
 self.addEventListener('install', (e) => {
