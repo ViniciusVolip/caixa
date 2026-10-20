@@ -240,3 +240,23 @@ textarea.input { padding: 14px 16px; min-height: 80px; resize: vertical; }
 .cx-proj .hint { margin: 12px 0 0; }
 [data-sheet] { display: flex; flex-direction: column; gap: 16px; }
 [data-sheet] .section-head { margin: 4px 0 -6px; }
+
+/* v1.6: vencimentos, orçamento, atalhos */
+.venc-strip { display: flex; gap: 10px; overflow-x: auto; padding: 2px 2px 6px; margin: 0 -2px; scrollbar-width: none; }
+.venc-strip::-webkit-scrollbar { display: none; }
+.venc { flex: 0 0 auto; min-width: 136px; max-width: 170px; background: var(--card); border: 0; border-radius: 18px; padding: 12px 14px; display: flex; flex-direction: column; gap: 4px; text-align: left; color: inherit; font: inherit; }
+button.venc { cursor: pointer; }
+.venc small { font-size: 12px; color: var(--ink-2); }
+.venc span { font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.venc strong { font-family: var(--display); font-size: 18px; font-weight: 700; }
+.venc em { font-style: normal; font-size: 11px; color: var(--ink-2); }
+.venc.soon { background: var(--yellow); }
+.venc.soon small, .venc.soon em { color: var(--ink); }
+.orc-row .row-main { min-width: 0; }
+.orc-bar { display: block; height: 6px; border-radius: 99px; background: rgba(0,0,0,.08); margin-top: 7px; overflow: hidden; }
+.orc-bar i { display: block; height: 100%; border-radius: 99px; background: var(--lime); }
+.orc-bar.orange i { background: var(--orange); }
+.orc-bar.red i { background: #E5533D; }
+.atalhos .chip { display: inline-flex; flex-direction: column; align-items: flex-start; gap: 2px; line-height: 1.15; padding-top: 8px; padding-bottom: 8px; }
+.atalhos .chip em { font-style: normal; font-size: 11px; opacity: .7; }
+.day-label { display: flex; justify-content: space-between; gap: 12px; }

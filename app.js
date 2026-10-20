@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '1.5.0';
+  const VERSION = '1.6.0';
   const LOCK_AFTER_MS = 3 * 60 * 1000;
 
   /* ================= armazenamento local ================= */
@@ -136,7 +136,64 @@
       ajuste: (mes) => cxPend.filter((m) => m.mes === mes && m.mov !== 'Saldo inicial').reduce((t, m) => t + sinal(m) * m.valor, 0) - removidos.filter((m) => m.mes === mes && m.mov !== 'Saldo inicial').reduce((t, m) => t + sinal(m) * m.valor, 0)
     };
 
-    return { d, lancamentos, lista, caixinha };
+    const orc = {};
+    (d.orcamento || []).forEach((o) => { orc[o.categoria] = o.limite; });
+    S.queue.forEach((o) => { if (o.op === 'setOrcamento') { if (o.data.limite > 0) orc[o.data.categoria] = o.data.limite; else delete orc[o.data.categoria]; } });
+
+    return { d, lancamentos, lista, caixinha, orc };
+  }
+
+  /* ================= orçamento por categoria ================= */
+  const orcCor = (p) => (p >= 1 ? 'red' : p >= 0.8 ? 'orange' : 'lime');
+  function orcLinhas(dm, orc) {
+    const gasto = {};
+    (dm.categorias || []).forEach((c) => { gasto[c.nome] = c.valor; });
+    return Object.keys(orc).map((cat) => ({ cat, limite: orc[cat], gasto: gasto[cat] || 0, p: (gasto[cat] || 0) / orc[cat] }))
+      .sort((a, b) => b.p - a.p);
+  }
+  function orcRow(o) {
+    const resto = o.limite - o.gasto;
+    return `<button class="row orc-row" data-act="orc-form" data-arg="${esc(o.cat)}"><span class="row-icon">${catIcon(o.cat)}</span><span class="row-main"><span>${esc(o.cat)}</span><small>${brl(o.gasto)} de ${brl(o.limite)}${resto >= 0 ? `, restam ${brl(resto)}` : `, passou ${brl(-resto)}`}</small><span class="orc-bar ${orcCor(o.p)}"><i style="width:${Math.min(100, o.p * 100).toFixed(1)}%"></i></span></span><span class="row-value">${pct(o.p)}</span></button>`;
+  }
+
+  /* ================= atalhos de lançamento ================= */
+  function atalhos(lancamentos) {
+    const g = {};
+    lancamentos.filter((l) => !/^(AB|MK)-/.test(l.id) && l.descricao).forEach((l) => {
+      const k = [l.descricao.trim().toLowerCase(), l.categoria, l.forma, l.tipo].join('|');
+      if (!g[k]) g[k] = { n: 0, ult: l };
+      g[k].n++;
+      if (l.data > g[k].ult.data) g[k].ult = l;
+    });
+    return Object.values(g).sort((a, b) => b.n - a.n || (a.ult.data < b.ult.data ? 1 : -1)).slice(0, 6).map((x) => x.ult);
+  }
+
+  /* ================= próximos vencimentos ================= */
+  function vencimentos(dm, r) {
+    const hoje = fromIso(todayIso());
+    const base = fromIso(dm.mes);
+    const lst = [];
+    (dm.itens || []).forEach((it) => {
+      if (!it.dia || it.forma === 'Nubank' || it.grupo === 'Fatura Nubank') return;
+      lst.push({ nome: it.descricao, dia: it.dia, valor: it.minhaParte, quem: it.tipo === 'Casa' && it.pagoPor && it.pagoPor !== 'Eu' ? it.pagoPor : '' });
+    });
+    if (r.fatura > 0) lst.push({ nome: 'Fatura Nubank', dia: vencNubank(), valor: r.fatura, quem: '', fatura: true });
+    const out = [];
+    [0, 1].forEach((add) => {
+      lst.forEach((v) => {
+        const dim = new Date(base.getFullYear(), base.getMonth() + add + 1, 0).getDate();
+        const dt = new Date(base.getFullYear(), base.getMonth() + add, Math.min(v.dia, dim));
+        const dias = Math.round((dt - hoje) / 86400000);
+        if (dias >= 0 && dias <= 35) out.push(Object.assign({}, v, { dias, data: dt }));
+      });
+    });
+    return out.sort((a, b) => a.dias - b.dias).slice(0, 6);
+  }
+  function vencStrip(lst) {
+    if (!lst.length) return '';
+    const quando = (n) => (n === 0 ? 'Hoje' : n === 1 ? 'Amanhã' : `em ${n} dias`);
+    return `<div class="section-head"><h2>Próximos vencimentos</h2></div>
+    <div class="venc-strip">${lst.map((v) => `<${v.fatura ? 'button data-act="fatura"' : 'div'} class="venc${v.dias <= 2 ? ' soon' : ''}"><small>${quando(v.dias)}, dia ${v.data.getDate()}</small><span>${esc(v.nome)}</span><strong>${brl(v.valor)}</strong>${v.quem ? `<em>${esc(v.quem)} paga</em>` : ''}</${v.fatura ? 'button' : 'div'}>`).join('')}</div>`;
   }
 
   /* ================= fatura do Nubank ================= */
@@ -405,7 +462,7 @@
   }
 
   function telaInicio() {
-    const { d, lancamentos, caixinha } = view();
+    const { d, lancamentos, caixinha, orc } = view();
     if (!d.resumo) return topBar() + pendingBanner() + loading();
     const dm = dadosMes(d);
     const chips = mesChips(d, lancamentos);
@@ -434,12 +491,14 @@
       <button class="action" data-act="novo-mercado"><span>${I.receipt()}</span>Mercado</button>
       <button class="action" data-act="go" data-arg="lista"><span>${I.cart()}</span>Lista</button>
     </div>` : ''}
+    ${dm.atual ? vencStrip(vencimentos(dm, r)) : ''}
     <div class="tiles">
       ${sobraTile('Sobra do pagamento', r.sobraPagamento)}
       ${sobraTile('Sobra do vale', r.sobraVale)}
       <button class="tile tile-btn" data-act="fatura"><b>Fatura Nubank</b><span><strong>${brl(r.fatura)}</strong><br><em>vence dia ${vencNubank()}, toque para ver</em></span></button>
       <div class="tile yellow"><b>Maior gasto</b><span><strong>${top ? esc(top.nome) : '—'}</strong>${top ? `<br><em>${brl(top.valor)}, ${pct(r.despesas ? top.valor / r.despesas : 0)}</em>` : ''}</span></div>
     </div>
+    ${(() => { const ol = orcLinhas(dm, orc); return ol.length ? `<div class="section-head"><h2>Orçamento</h2><button class="link" data-act="go" data-arg="estatisticas">Ver todos</button></div><div class="card">${ol.slice(0, 3).map(orcRow).join('')}</div>` : ''; })()}
     <div class="card cx-card"><button class="row" data-act="caixinha"><span class="row-icon lime">${I.piggy(20)}</span><span class="row-main"><span>Caixinha</span><small>${cxSub}</small></span><span class="row-value">${brl(caixinha.total)}<small>guardado no total</small></span></button></div>
     ${sep.length ? `<div class="section-head"><h2>Despesas separadas</h2><button class="link" data-act="go" data-arg="estatisticas">Detalhar</button></div>
     <div class="card">${sep.map((g) => `<button class="row" data-act="ver-grupo" data-arg="${esc(g.nome)}"><span class="row-icon">${grupoIcon(g.nome)}</span><span class="row-main"><span>${esc(grupoTitulo(g.nome))}</span><small>${grupoDono(g.nome)}${pct(r.despesas ? g.valor / r.despesas : 0)} das despesas</small></span><span class="row-value">${brl(g.valor)}</span></button>`).join('')}</div>` : ''}
@@ -457,14 +516,16 @@
     const q = S.filtro.q.trim().toLowerCase();
     const TIPOS = [['todos', 'Tudo'], ['Casa', 'Casa'], ['Pessoal', 'Pessoais'], ['Nubank', 'Nubank']];
     const okTipo = (l) => S.filtro.tipo === 'todos' || (S.filtro.tipo === 'Nubank' ? l.forma === 'Nubank' : l.tipo === S.filtro.tipo);
-    const lista = lancamentos.filter((l) => (!mes || l.mes === mes) && okTipo(l) && (!q || (l.descricao + ' ' + l.categoria + ' ' + (l.obs || '')).toLowerCase().includes(q)));
+    const lista = lancamentos.filter((l) => (q || !mes || l.mes === mes) && okTipo(l) && (!q || (l.descricao + ' ' + l.categoria + ' ' + (l.obs || '')).toLowerCase().includes(q)));
     const total = lista.reduce((s, l) => s + (Number(l.minhaParte) || Number(l.valor) || 0), 0);
     let html = `<header class="top"><h1 class="page-title">Lançamentos</h1><button class="icon-btn" data-act="novo-lanc" aria-label="Novo lançamento">${I.plus(20)}</button></header>
       <label class="search">${I.search(18)}<span class="sr">Buscar</span><input type="search" id="busca" placeholder="Buscar por descrição ou categoria" value="${esc(S.filtro.q)}"></label>
       ${mesChips(d, lancamentos)}
       <div class="seg" role="group" aria-label="Tipo de despesa">${TIPOS.map(([k, label]) => `<button data-act="filtro-tipo" data-arg="${k}" aria-pressed="${S.filtro.tipo === k}">${label}</button>`).join('')}</div>`;
     if (!lista.length) return html + `<div class="empty">${q ? 'Nenhum lançamento encontrado para essa busca.' : S.filtro.tipo !== 'todos' ? 'Nenhum lançamento desse tipo neste mês.' : 'Nenhum lançamento neste mês.'}<br><button class="btn dark" data-act="novo-lanc">Lançar um gasto</button></div>`;
-    html += `<p class="hint">${lista.length} lançamento${lista.length === 1 ? '' : 's'}, sua parte somando ${brl(total)}</p>`;
+    html += `<p class="hint">${lista.length} lançamento${lista.length === 1 ? '' : 's'}${q ? ' em todos os meses' : ''}, sua parte somando ${brl(total)}</p>`;
+    const totDia = {};
+    lista.forEach((l) => { totDia[l.data] = (totDia[l.data] || 0) + (Number(l.minhaParte) || Number(l.valor) || 0); });
     html += `<div class="ltable-wrap"><table class="ltable"><thead><tr><th scope="col">Data</th><th scope="col">Descrição</th><th scope="col">Categoria</th><th scope="col">Forma</th><th scope="col" class="num">Valor</th><th scope="col" class="num">Sua parte</th></tr></thead><tbody>${lista.map((l) => `<tr data-act="lanc" data-id="${esc(l.id)}" tabindex="0"><td>${l.data ? l.data.slice(8, 10) + '/' + l.data.slice(5, 7) : ''}</td><td>${l.pending ? '<i class="pending-dot" aria-label="aguardando envio"></i>' : ''}${esc(l.descricao)}</td><td>${esc(l.categoria || 'Sem categoria')}</td><td>${esc(l.forma || '')}</td><td class="num">${brl(l.valor)}</td><td class="num">${brl(l.minhaParte || l.valor)}</td></tr>`).join('')}</tbody></table></div><div class="lgroups">`;
     let dia = null;
     let open = false;
@@ -472,7 +533,7 @@
       if (l.data !== dia) {
         if (open) html += '</div>';
         dia = l.data;
-        html += `<div class="day-label">${dayLabel(dia)}</div><div class="card">`;
+        html += `<div class="day-label"><span>${dayLabel(dia)}</span><span>${brl(totDia[dia])}</span></div><div class="card">`;
         open = true;
       }
       html += lancRow(l);
@@ -512,6 +573,7 @@
       html += `<div class="split"><div class="split-col"><div class="section-head"><h2>Despesas separadas</h2></div><p class="hint">Toque num grupo para ver o que entrou nele. Valores da sua parte.</p><div class="card">${despesasSeparadas(dm, lancamentos, r.despesas)}</div></div>`;
       html += `<div class="split-col">${top.length ? `<div class="card pad"><div class="card-title"><h3>Para onde foi</h3><small>As categorias que mais pesaram em ${nome}</small></div>
         <div class="pills">${top.map((c, i) => `<div class="pillbar"><div class="track"><div class="fill" style="height:${Math.max(24, (c.valor / max) * 100)}%;background:${BAR_COLORS[i]};${i === 4 ? 'color:#fff;' : ''}">${pct(r.despesas ? c.valor / r.despesas : 0)}</div></div><small title="${esc(c.nome)}">${esc(c.nome.split(' ')[0])}</small></div>`).join('')}</div></div>` : ''}
+        ${(() => { const ol = orcLinhas(dm, view().orc); return `<div class="section-head"><h2>Orçamento do mês</h2><button class="link" data-act="orc-lista">${ol.length ? 'Editar limites' : 'Definir limites'}</button></div>${ol.length ? `<div class="card">${ol.map(orcRow).join('')}</div>` : '<p class="hint">Defina um limite por categoria, por exemplo Lazer R$ 150, e acompanhe quanto já foi usado. A barra fica laranja em 80% e vermelha ao passar.</p>'}`; })()}
         <div class="section-head"><h2>Por categoria</h2></div>
         <div class="card">${cats.length ? cats.map((c) => { const its = itens.filter((i) => i.categoria === c.nome); return bloco('c:' + c.nome, catIcon(c.nome), c.nome, `${pct(r.despesas ? c.valor / r.despesas : 0)} das despesas`, c.valor, its); }).join('') : '<div class="empty">Nenhuma despesa neste mês.</div>'}</div></div></div>`;
       return html;
@@ -669,11 +731,15 @@
     const { lancamentos } = view();
     const ed = opts.lanc || null;
     const descs = Array.from(new Set(lancamentos.map((l) => l.descricao))).slice(0, 60);
-    const ini = ed ? ed : { forma: opts.forma || 'Pix', tipo: 'Pessoal', pagoPor: 'Eu', data: todayIso(), categoria: '', descricao: '', obs: '' };
-    if (!ed && opts.forma === 'Nubank') ini.mes = mesFatura(ini.data);
+    const b = opts.base || null;
+    const ini = ed ? ed : b ? { forma: b.forma, tipo: b.tipo, pagoPor: b.pagoPor || 'Eu', data: todayIso(), categoria: b.categoria, descricao: b.descricao, obs: b.obs || '', valor: b.valor }
+      : { forma: opts.forma || 'Pix', tipo: 'Pessoal', pagoPor: 'Eu', data: todayIso(), categoria: '', descricao: '', obs: '' };
+    if (!ed && ini.forma === 'Nubank') ini.mes = mesFatura(ini.data);
+    const ats = ed || b ? [] : atalhos(lancamentos).filter((a) => opts.forma !== 'Nubank' || a.forma === 'Nubank');
     openSheet(ed ? 'Editar lançamento' : opts.forma === 'Nubank' ? 'Compra no cartão' : 'Novo lançamento', `
       <form id="f-lanc" class="setup-form" novalidate>
-        <label class="money"><span>R$</span><span class="sr">Valor</span><input id="f-valor" inputmode="decimal" autocomplete="off" placeholder="0,00" enterkeyhint="next" value="${ed ? brl(ed.valor).replace('R$', '').trim() : ''}"></label>
+        ${ats.length ? `<div class="field"><span class="label">Atalhos</span><div class="chips scroll atalhos">${ats.map((a, i) => `<button type="button" class="chip" data-atalho="${i}">${esc(a.descricao)}<em>${brl(a.valor)}</em></button>`).join('')}</div></div>` : ''}
+        <label class="money"><span>R$</span><span class="sr">Valor</span><input id="f-valor" inputmode="decimal" autocomplete="off" placeholder="0,00" enterkeyhint="next" value="${ed || b ? brl(ini.valor).replace('R$', '').trim() : ''}"></label>
         <div class="field"><label for="f-desc">Descrição</label><input class="input" id="f-desc" list="f-desc-list" autocomplete="off" placeholder="Ex.: Almoço, Uber, Farmácia" value="${esc(ini.descricao)}"><datalist id="f-desc-list">${descs.map((x) => `<option value="${esc(x)}">`).join('')}</datalist></div>
         <div class="field"><span class="label">Categoria</span>${chips('categoria', L.categorias, ini.categoria)}</div>
         <div class="field"><span class="label">Forma de pagamento</span>${chips('forma', L.formas, ini.forma)}</div>
@@ -709,7 +775,20 @@
         }
       };
       pintaMes();
-      if (!ed) setTimeout(() => valor.focus(), 250);
+      if (!ed) setTimeout(() => { valor.focus(); if (b) valor.select(); }, 250);
+      root.querySelectorAll('[data-atalho]').forEach((btn) => btn.addEventListener('click', () => {
+        const a = ats[Number(btn.dataset.atalho)];
+        root.querySelector('#f-desc').value = a.descricao;
+        selectChip(root, 'categoria', a.categoria);
+        selectChip(root, 'forma', a.forma);
+        selectChip(root, 'tipo', a.tipo);
+        if (a.tipo === 'Casa') selectChip(root, 'pagoPor', a.pagoPor || 'Eu');
+        root.querySelector('#f-obs').value = a.obs || '';
+        valor.value = brl(a.valor).replace('R$', '').trim();
+        root.querySelectorAll('[data-atalho]').forEach((x) => x.setAttribute('aria-pressed', String(x === btn)));
+        mesManual = false; syncLancForm(root); pintaMes();
+        valor.focus(); valor.select();
+      }));
       dataEl.addEventListener('change', () => { mesManual = false; pintaMes(); });
       root.querySelector('#f-desc').addEventListener('change', (e) => {
         if (ed) return;
@@ -1028,6 +1107,43 @@
     });
   }
 
+  /* ================= limites do orçamento ================= */
+  function orcLista() {
+    const { d, orc } = view();
+    const dm = dadosMes(d);
+    const gasto = {};
+    (dm.categorias || []).forEach((c) => { gasto[c.nome] = c.valor; });
+    const cats = cfgLists().categorias;
+    openSheet('Limites por categoria', `
+      <p class="hint">Valores da sua parte, por mês. Toque numa categoria para definir ou mudar o limite.</p>
+      <div class="card">${cats.map((c) => `<button class="row" data-act="orc-form" data-arg="${esc(c)}"><span class="row-icon">${catIcon(c)}</span><span class="row-main"><span>${esc(c)}</span><small>Gasto em ${monthName(dm.mes)}: ${brl(gasto[c] || 0)}</small></span><span class="row-value">${orc[c] ? brl(orc[c]) : '<small>sem limite</small>'}</span></button>`).join('')}</div>`);
+  }
+
+  function formOrcamento(cat) {
+    const { d, orc } = view();
+    const dm = dadosMes(d);
+    const c = (dm.categorias || []).find((x) => x.nome === cat);
+    const atual = orc[cat] || 0;
+    openSheet(esc(cat), `
+      <form id="f-orc" class="setup-form" novalidate>
+        <p class="hint">Limite mensal da sua parte em ${esc(cat)}. Em ${monthName(dm.mes)} você já gastou ${brl(c ? c.valor : 0)}.</p>
+        <label class="money"><span>R$</span><span class="sr">Limite</span><input id="orc-valor" inputmode="decimal" autocomplete="off" placeholder="0,00" value="${atual ? brl(atual).replace('R$', '').trim() : ''}"></label>
+        <p class="error" hidden></p>
+        <button class="btn primary block" type="submit">Salvar limite</button>
+        ${atual ? `<button class="btn ghost block" type="button" data-act="orc-del" data-arg="${esc(cat)}">Tirar o limite</button>` : ''}
+      </form>`, (root) => {
+      setTimeout(() => { const i = root.querySelector('#orc-valor'); i.focus(); i.select(); }, 250);
+      root.querySelector('#f-orc').addEventListener('submit', (e) => {
+        e.preventDefault();
+        const v = parseMoney(root.querySelector('#orc-valor').value);
+        if (!(v > 0)) return showError(root, 'Digite o limite do mês.');
+        enqueue('setOrcamento', { categoria: cat, limite: v }, uid('O'));
+        orcLista();
+        toast(`Limite de ${cat}: ${brl(v)}`);
+      });
+    });
+  }
+
   /* ================= conta fixa com valor do mês ================= */
   function formFixa(desc, mes) {
     const { d, lancamentos } = view();
@@ -1102,7 +1218,7 @@
       </div>
       ${l.pending ? '<p class="hint"><span class="pending-dot"></span>Ainda não chegou à planilha. Será enviado quando houver conexão.</p>' : ''}
       ${auto ? '<p class="hint">Este lançamento foi criado por um registro de abastecimento ou de mercado. Para mudar ou apagar, use a planilha.</p>'
-        : `<button class="btn dark block" data-act="edit-lanc" data-id="${esc(l.id)}">Editar</button>
+        : `<div class="cx-actions"><button class="btn dark" data-act="edit-lanc" data-id="${esc(l.id)}">Editar</button><button class="btn ghost" data-act="repetir-lanc" data-id="${esc(l.id)}">Lançar de novo</button></div>
         <button class="btn danger block" data-act="${pendAdd ? 'cancel-pend' : 'delete-lanc'}" data-id="${esc(l.id)}">${pendAdd ? 'Cancelar este lançamento' : 'Apagar lançamento'}</button>`}`);
   }
 
@@ -1214,6 +1330,10 @@
       case 'lanc': detalheLanc(id); break;
       case 'fixa': formFixa(id, arg); break;
       case 'fatura': telaFatura(); break;
+      case 'orc-lista': orcLista(); break;
+      case 'orc-form': formOrcamento(arg); break;
+      case 'orc-del': enqueue('setOrcamento', { categoria: arg, limite: 0 }, uid('O')); orcLista(); toast('Limite removido'); break;
+      case 'repetir-lanc': { const l = view().lancamentos.find((x) => x.id === id); if (l) formLancamento({ base: l }); break; }
       case 'fat-mes': escolherMes(arg); telaFatura(); break;
       case 'fat-novo': formLancamento({ forma: 'Nubank', voltar: 'fatura' }); break;
       case 'fat-conferir': { const c = document.getElementById('fat-conf'); c.hidden = !c.hidden; if (!c.hidden) document.getElementById('fat-real').focus(); break; }
