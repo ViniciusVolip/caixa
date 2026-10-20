@@ -181,6 +181,7 @@
     const out = [];
     [0, 1].forEach((add) => {
       lst.forEach((v) => {
+        if (add && v.fatura) return; // a próxima fatura ainda não tem valor fechado
         const dim = new Date(base.getFullYear(), base.getMonth() + add + 1, 0).getDate();
         const dt = new Date(base.getFullYear(), base.getMonth() + add, Math.min(v.dia, dim));
         const dias = Math.round((dt - hoje) / 86400000);
