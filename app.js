@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '1.7.1';
+  const VERSION = '1.8.0';
   const LOCK_AFTER_MS = 3 * 60 * 1000;
 
   /* ================= armazenamento local ================= */
@@ -492,7 +492,8 @@
       <button class="action" data-act="novo-abast"><span>${I.fuel()}</span>Abastecer</button>
       <button class="action" data-act="novo-mercado"><span>${I.receipt()}</span>Mercado</button>
       <button class="action" data-act="go" data-arg="lista"><span>${I.cart()}</span>Lista</button>
-    </div>` : ''}
+    </div>
+    <button class="btn dark block nota-btn" data-act="ler-nota" data-arg="auto">${I.qr(18)} Ler nota fiscal</button>` : ''}
     ${dm.atual ? vencStrip(vencimentos(dm, r)) : ''}
     <div class="tiles">
       ${sobraTile('Sobra do pagamento', r.sobraPagamento)}
@@ -742,12 +743,13 @@
     const ed = opts.lanc || null;
     const descs = Array.from(new Set(lancamentos.map((l) => l.descricao))).slice(0, 60);
     const b = opts.base || null;
-    const ini = ed ? ed : b ? { forma: b.forma, tipo: b.tipo, pagoPor: b.pagoPor || 'Eu', data: todayIso(), categoria: b.categoria, descricao: b.descricao, obs: b.obs || '', valor: b.valor }
+    const ini = ed ? ed : b ? { forma: b.forma, tipo: b.tipo, pagoPor: b.pagoPor || 'Eu', data: b.data || todayIso(), categoria: b.categoria, descricao: b.descricao, obs: b.obs || '', valor: b.valor }
       : { forma: opts.forma || 'Pix', tipo: 'Pessoal', pagoPor: 'Eu', data: todayIso(), categoria: '', descricao: '', obs: '' };
     if (!ed && ini.forma === 'Nubank') ini.mes = mesFatura(ini.data);
     const ats = ed || b ? [] : atalhos(lancamentos).filter((a) => opts.forma !== 'Nubank' || a.forma === 'Nubank');
     openSheet(ed ? 'Editar lançamento' : opts.forma === 'Nubank' ? 'Compra no cartão' : 'Novo lançamento', `
       <form id="f-lanc" class="setup-form" novalidate>
+        ${opts.nota ? notaTrocar : !ed && !b ? `<button type="button" class="btn ghost block nota-btn" data-act="ler-nota" data-arg="lanc">${I.qr(18)} Ler o QR Code da nota</button>` : ''}
         ${ats.length ? `<div class="field"><span class="label">Atalhos</span><div class="chips scroll atalhos">${ats.map((a, i) => `<button type="button" class="chip" data-atalho="${i}">${esc(a.descricao)}<em>${brl(a.valor)}</em></button>`).join('')}</div></div>` : ''}
         <label class="money"><span>R$</span><span class="sr">Valor</span><input id="f-valor" inputmode="decimal" autocomplete="off" placeholder="0,00" enterkeyhint="next" value="${ed || b ? brl(ini.valor).replace('R$', '').trim() : ''}"></label>
         <div class="field"><label for="f-desc">Descrição</label><input class="input" id="f-desc" list="f-desc-list" autocomplete="off" placeholder="Ex.: Almoço, Uber, Farmácia" value="${esc(ini.descricao)}"><datalist id="f-desc-list">${descs.map((x) => `<option value="${esc(x)}">`).join('')}</datalist></div>
@@ -854,7 +856,8 @@
     root.querySelectorAll(`[data-group="${group}"]`).forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.value === value)));
   }
 
-  function formAbastecimento() {
+  function formAbastecimento(pre) {
+    pre = pre || {};
     const L = cfgLists();
     const c = (S.data && S.data.combustivel) || { postos: [], registros: [] };
     const postos = c.postos.map((p) => p.posto).filter(Boolean);
@@ -862,28 +865,30 @@
     const barato = c.postos.length > 1 ? c.postos[0] : null;
     openSheet('Abastecimento', `
       <form id="f-ab" class="setup-form" novalidate>
+        ${pre.nota ? notaTrocar : `<button type="button" class="btn ghost block nota-btn" data-act="ler-nota" data-arg="abast">${I.qr(18)} Ler o QR Code da nota</button>`}
         ${barato ? `<p class="hint">Mais barato até agora: <strong>${esc(barato.posto)}</strong>, R$ ${barato.precoMedio.toFixed(3).replace('.', ',')} o litro.</p>` : ''}
-        <div class="field"><label for="a-posto">Posto</label><input class="input" id="a-posto" list="a-postos" autocomplete="off" value="${esc(ultimo ? ultimo.posto : '')}"><datalist id="a-postos">${postos.map((p) => `<option value="${esc(p)}">`).join('')}</datalist></div>
+        <div class="field"><label for="a-posto">Posto</label><input class="input" id="a-posto" list="a-postos" autocomplete="off" value="${esc(pre.posto || (ultimo ? ultimo.posto : ''))}"><datalist id="a-postos">${postos.map((p) => `<option value="${esc(p)}">`).join('')}</datalist></div>
         <div class="grid-2">
-          <div class="field"><label for="a-litros">Litros</label><input class="input" id="a-litros" inputmode="decimal" autocomplete="off" placeholder="0,00"></div>
-          <div class="field"><label for="a-preco">Preço do litro</label><input class="input" id="a-preco" inputmode="decimal" autocomplete="off" placeholder="0,000" value="${ultimo && ultimo.preco ? String(ultimo.preco).replace('.', ',') : ''}"></div>
+          <div class="field"><label for="a-litros">Litros</label><input class="input" id="a-litros" inputmode="decimal" autocomplete="off" placeholder="0,00" value="${pre.litros ? String(pre.litros).replace('.', ',') : ''}"></div>
+          <div class="field"><label for="a-preco">Preço do litro</label><input class="input" id="a-preco" inputmode="decimal" autocomplete="off" placeholder="0,000" value="${pre.preco ? String(pre.preco).replace('.', ',') : ultimo && ultimo.preco ? String(ultimo.preco).replace('.', ',') : ''}"></div>
         </div>
-        <label class="money"><span>R$</span><span class="sr">Total pago</span><input id="a-total" inputmode="decimal" autocomplete="off" placeholder="0,00"></label>
+        <label class="money"><span>R$</span><span class="sr">Total pago</span><input id="a-total" inputmode="decimal" autocomplete="off" placeholder="0,00" value="${pre.total ? pre.total.toFixed(2).replace('.', ',') : ''}"></label>
         <p class="hint">O total é calculado pelos litros e pelo preço. Se pagou um valor redondo, digite direto aqui.</p>
         <div class="grid-2">
           <div class="field"><label for="a-km">Km no painel</label><input class="input" id="a-km" inputmode="numeric" autocomplete="off" placeholder="Opcional"></div>
-          <div class="field"><label for="a-data">Data</label><input class="input" type="date" id="a-data" value="${todayIso()}"></div>
+          <div class="field"><label for="a-data">Data</label><input class="input" type="date" id="a-data" value="${pre.data || todayIso()}"></div>
         </div>
-        <div class="field"><span class="label">Forma de pagamento</span>${chips('forma', L.formas, (ultimo && ultimo.forma) || 'Pix')}</div>
-        <div class="field"><label for="a-obs">Observações</label><input class="input" id="a-obs" autocomplete="off" placeholder="Ex.: gasolina comum"></div>
+        <div class="field"><span class="label">Forma de pagamento</span>${chips('forma', L.formas, pre.forma || (ultimo && ultimo.forma) || 'Pix')}</div>
+        <div class="field"><label for="a-obs">Observações</label><input class="input" id="a-obs" autocomplete="off" placeholder="Ex.: gasolina comum" value="${esc(pre.obs || '')}"></div>
         <p class="error" hidden></p>
         <button class="btn primary block" type="submit">Salvar abastecimento</button>
       </form>`, (root) => {
       const litros = root.querySelector('#a-litros');
       const preco = root.querySelector('#a-preco');
       const total = root.querySelector('#a-total');
-      let manual = false;
+      let manual = !!pre.total;
       total.addEventListener('input', () => { manual = total.value.trim() !== ''; });
+      if (pre.nota) setTimeout(() => root.querySelector('#a-km').focus(), 250);
       const calc = () => {
         if (manual) return;
         const l = parseMoney(litros.value), p = parseMoney(preco.value);
@@ -899,8 +904,9 @@
         if (!(t > 0)) return showError(root, 'Preencha litros e preço, ou o total pago.');
         enqueue('addAbastecimento', {
           posto, litros: l > 0 ? l : '', preco: p > 0 ? p : '', total: t, km: parseMoney(root.querySelector('#a-km').value) || '',
-          data: root.querySelector('#a-data').value || todayIso(), forma: picked(root, 'forma') || 'Pix', obs: root.querySelector('#a-obs').value.trim()
-        }, uid('A'));
+          data: root.querySelector('#a-data').value || todayIso(), forma: picked(root, 'forma') || 'Pix', obs: root.querySelector('#a-obs').value.trim(),
+          mes: (() => { const dd = root.querySelector('#a-data').value || todayIso(); return picked(root, 'forma') === 'Nubank' ? mesFatura(dd) : monthStartIso(fromIso(dd)); })()
+        }, pre.nota && S.ultNota && S.ultNota.n.chave ? 'NA' + S.ultNota.n.chave.slice(-12) : uid('A'));
         closeSheet();
         toast('Abastecimento guardado. Ele também entra nos lançamentos.');
       });
@@ -913,7 +919,7 @@
     const nomes = Array.from(new Set(m.compras.map((c) => c.mercado))).filter(Boolean);
     openSheet('Compra de mercado', `
       <form id="f-mk" class="setup-form" novalidate>
-        <button type="button" class="btn dark block nota-btn" data-act="ler-nota">${I.qr(18)} Ler o QR Code da nota</button>
+        <button type="button" class="btn dark block nota-btn" data-act="ler-nota" data-arg="mercado">${I.qr(18)} Ler o QR Code da nota</button>
         <label class="money"><span>R$</span><span class="sr">Valor da nota</span><input id="m-valor" inputmode="decimal" autocomplete="off" placeholder="0,00"></label>
         <div class="field"><label for="m-nome">Mercado</label><input class="input" id="m-nome" list="m-nomes" autocomplete="off" value="${esc(nomes[0] || '')}"><datalist id="m-nomes">${nomes.map((n) => `<option value="${esc(n)}">`).join('')}</datalist></div>
         <div class="field"><span class="label">Compra para</span>${segOf('tipo', ['Casa', 'Pessoal'], 'Casa')}</div>
@@ -935,7 +941,7 @@
         const tipo = picked(root, 'tipo') || 'Casa';
         enqueue('addMercado', {
           valor: v, mercado: nome, tipo, pagoPor: tipo === 'Casa' ? picked(root, 'pagoPor') || 'Eu' : 'Eu',
-          forma: picked(root, 'forma') || 'Pix', data: root.querySelector('#m-data').value || todayIso(), obs: root.querySelector('#m-obs').value.trim()
+          forma: picked(root, 'forma') || 'Pix', data: root.querySelector('#m-data').value || todayIso(), mes: (() => { const dd = root.querySelector('#m-data').value || todayIso(); return picked(root, 'forma') === 'Nubank' ? mesFatura(dd) : monthStartIso(fromIso(dd)); })(), obs: root.querySelector('#m-obs').value.trim()
         }, uid('M'));
         closeSheet();
         toast('Compra guardada. Ela também entra nos lançamentos.');
@@ -1225,7 +1231,9 @@
     openSheet('Ler nota fiscal', `<div class="empty">Buscando a nota na Sefaz…</div>`);
     try {
       const res = await api({ action: 'nota', url });
-      telaNota(res.data, url);
+      S.ultNota = { n: res.data, url };
+      const o = S.notaOrigem || 'mercado';
+      abrirNotaComo(o === 'auto' ? tipoDaNota(res.data) : o);
     } catch (err) {
       openSheet('Ler nota fiscal', `<div class="empty">${esc(err.network ? 'Sem conexão. Tente de novo quando tiver internet.' : err.message)}<br>
         <button class="btn dark" data-act="ler-nota">Tentar de novo</button>
@@ -1264,6 +1272,7 @@
       <form id="f-nota" class="setup-form" novalidate>
         <div class="cx-total"><small>${esc(n.emitente || '')}, ${esc(n.data.slice(8, 10) + '/' + n.data.slice(5, 7) + '/' + n.data.slice(0, 4))}</small><strong>${brl(n.total)}</strong>
           <p class="hint">${n.itens.length} ${n.itens.length === 1 ? 'item' : 'itens'}${n.desconto ? `, ${brl(n.desconto)} de desconto` : ''}${n.forma ? ', ' + esc(n.forma) : ''}</p></div>
+        ${notaTrocar}
         ${jaFoi ? '<p class="error">Esta nota já foi registrada antes. Salvar de novo não duplica a compra.</p>' : ''}
         <div class="section-head"><h2>Itens</h2><small class="hint">ligue cada um à sua lista</small></div>
         <div class="card nota-itens">${n.itens.map((it, i) => `<div class="row nota-item"><span class="row-main"><span>${esc(it.descricao)}</span><small>${String(it.qtd).replace('.', ',')} ${esc(it.un.toLowerCase())} × ${brl(it.unit)}</small><select class="input sm" data-i="${i}" aria-label="Item da lista para ${esc(it.descricao)}">${opts(sugerirItem(it.descricao, lista))}</select></span><span class="row-value">${brl(it.total)}</span></div>`).join('')}</div>
@@ -1284,7 +1293,7 @@
         const sufixo = (n.chave || uid()).slice(-8);
         enqueue('addMercado', {
           valor: n.total, mercado: merc, tipo, pagoPor: tipo === 'Casa' ? picked(root, 'pagoPor') || 'Eu' : 'Eu',
-          forma: picked(root, 'forma') || 'Pix', data: n.data, obs: 'NFC-e ' + sufixo
+          forma: picked(root, 'forma') || 'Pix', data: n.data, mes: (picked(root, 'forma') === 'Nubank' ? mesFatura(n.data) : monthStartIso(fromIso(n.data))), obs: 'NFC-e ' + sufixo
         }, n.chave ? 'NF' + n.chave.slice(-12) : uid('M'));
         enqueue('addPrecos', { chave: n.chave, mercado: merc, data: n.data, itens }, uid('P'));
         if (root.querySelector('#n-marcar').checked) {
@@ -1297,13 +1306,56 @@
     });
   }
 
+  const RE_COMB = /GASOL|ETANOL|ALCOOL|DIESEL|GNV|COMBUST/;
+  /** Decide o que a nota parece ser: abastecimento, mercado ou lançamento comum. */
+  function tipoDaNota(n) {
+    const itens = n.itens.map((i) => normTxt(i.descricao)).join(' ');
+    const emi = normTxt(n.emitente);
+    if (RE_COMB.test(itens) || /POSTO|AUTO ?POSTO|COMBUST/.test(emi)) return 'abast';
+    if (/SUPERMERC|MERCADO|ATACAD|CARREFOUR|ASSAI|PAO DE ACUCAR|HIPER|SACOLAO|HORTIFRUT|MAKRO|TENDA|ROLDAO|SONDA|DIA BRASIL|EXTRA |SAMS|SAM S|NAGUMO|BIG |ZAFFARI|SAVEGNAGO|OXXO/.test(emi) || n.itens.length >= 6) return 'mercado';
+    return 'lanc';
+  }
+  function categoriaDaNota(n) {
+    const t = normTxt(n.emitente + ' ' + n.itens.map((i) => i.descricao).join(' '));
+    if (/FARMA|DROGA|RAIA|PACHECO|PANVEL|DROGASIL|ONOFRE/.test(t)) return 'Saúde';
+    if (/PET|COBASI|PETZ|RACAO|VETERIN/.test(t)) return 'Pets';
+    if (RE_COMB.test(t) || /AUTO PECAS|MOTOPECAS|MOTO PECAS|OFICINA|ESTACION/.test(t)) return 'Transporte';
+    if (/RESTAUR|LANCH|PIZZ|BURGER|PADARIA|PANIFIC|CAFE|CAFETERIA|BAR |CHOPP|MC ?DONALD|SUBWAY|HABIB|SORVET|ACAI|COMIDA|ALIMENT/.test(t)) return 'Alimentação';
+    if (/CINEMA|INGRESSO|TEATRO|SHOW/.test(t)) return 'Lazer';
+    return '';
+  }
+  const formaDaNota = (n) => (/cr[eé]dito/i.test(n.forma) ? 'Nubank' : /d[eé]bito/i.test(n.forma) ? 'Débito' : /dinheiro/i.test(n.forma) ? 'Dinheiro' : 'Pix');
+  const nomeDaNota = (n) => (n.emitente || '').replace(/\b(LTDA|S\.?A\.?|EIRELI|ME|EPP|COMERCIO|COM|IND(USTRIA)?|DE|E|DO|DA)\b\.?/gi, ' ').replace(/\s+/g, ' ').trim().toLowerCase().replace(/(^|\s)\S/g, (c) => c.toUpperCase()).split(' ').slice(0, 3).join(' ') || 'Compra';
+
+  function abrirNotaComo(tipo) {
+    const { n, url } = S.ultNota;
+    if (tipo === 'abast') {
+      const comb = n.itens.find((i) => RE_COMB.test(normTxt(i.descricao))) || n.itens[0];
+      formAbastecimento({ posto: nomeDaNota(n), litros: comb.un === 'L' || RE_COMB.test(normTxt(comb.descricao)) ? comb.qtd : '', preco: comb.unit, total: n.total, data: n.data, forma: formaDaNota(n), obs: comb.descricao.toLowerCase(), nota: true });
+    } else if (tipo === 'lanc') {
+      const forma = formaDaNota(n);
+      formLancamento({ base: { descricao: nomeDaNota(n), categoria: categoriaDaNota(n), forma, tipo: 'Pessoal', pagoPor: 'Eu', valor: n.total, data: n.data, obs: n.itens.length === 1 ? n.itens[0].descricao.toLowerCase() : n.itens.length + ' itens (NFC-e)' }, nota: true });
+    } else telaNota(n, url);
+  }
+  function escolherTipoNota() {
+    const { n } = S.ultNota;
+    openSheet('Registrar nota como', `
+      <div class="cx-total"><small>${esc(n.emitente || '')}</small><strong>${brl(n.total)}</strong></div>
+      <div class="card">
+        <button class="row" data-act="nota-como" data-arg="mercado"><span class="row-icon">${I.receipt(20)}</span><span class="row-main"><span>Compra de mercado</span><small>Liga os itens à lista e guarda os preços</small></span></button>
+        <button class="row" data-act="nota-como" data-arg="abast"><span class="row-icon">${I.fuel(20)}</span><span class="row-main"><span>Abastecimento</span><small>Litros e preço do combustível</small></span></button>
+        <button class="row" data-act="nota-como" data-arg="lanc"><span class="row-icon">${I.plus(20)}</span><span class="row-main"><span>Lançamento</span><small>Qualquer outro gasto</small></span></button>
+      </div>`);
+  }
+  const notaTrocar = '<button type="button" class="link nota-trocar" data-act="nota-tipo">Lido da nota. Não é isso? Registrar como outro tipo</button>';
+
   /** Link compartilhado com o app (Compartilhar → Caixa). */
   function lerCompartilhado() {
     const q = new URLSearchParams(location.search);
     if (!q.has('share')) return;
     const m = ((q.get('url') || '') + ' ' + (q.get('text') || '') + ' ' + (q.get('title') || '')).match(/https?:\/\/\S+/);
     history.replaceState(null, '', location.pathname + location.hash);
-    if (m && S.cfg) setTimeout(() => buscarNota(m[0]), 400);
+    if (m && S.cfg) { S.notaOrigem = 'auto'; setTimeout(() => buscarNota(m[0]), 400); }
   }
 
   /* ================= limites do orçamento ================= */
@@ -1529,7 +1581,9 @@
       case 'lanc': detalheLanc(id); break;
       case 'fixa': formFixa(id, arg); break;
       case 'fatura': telaFatura(); break;
-      case 'ler-nota': telaScanner(); break;
+      case 'ler-nota': S.notaOrigem = arg || 'mercado'; telaScanner(); break;
+      case 'nota-tipo': if (S.ultNota) escolherTipoNota(); break;
+      case 'nota-como': if (S.ultNota) abrirNotaComo(arg); break;
       case 'nota-url': { const u = (document.getElementById('scan-url').value || '').trim(); if (/^https?:\/\//i.test(u)) buscarNota(u); else toast('Cole o link completo da nota'); break; }
       case 'orc-lista': orcLista(); break;
       case 'orc-form': formOrcamento(arg); break;

@@ -276,3 +276,4 @@ button.venc { cursor: pointer; }
 .input.sm { margin-top: 8px; padding: 8px 10px; font-size: 14px; border-radius: 12px; height: auto; }
 .check-line { display: flex; align-items: center; gap: 10px; font-size: 15px; }
 .check-line input { width: 20px; height: 20px; accent-color: #111; }
+.nota-trocar { text-align: left; font-size: 13px; }
