@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '1.7.0';
+  const VERSION = '1.7.1';
   const LOCK_AFTER_MS = 3 * 60 * 1000;
 
   /* ================= armazenamento local ================= */
@@ -1135,7 +1135,9 @@
   function telaScanner() {
     openSheet('Ler nota fiscal', `<div data-sheet="scan">
       <div class="scan-box"><video id="scan-video" playsinline muted></video><i class="scan-frame"></i></div>
-      <p class="hint" id="scan-msg">Aponte para o QR Code no rodapé da nota. Segure firme, a uns 15 cm.</p>
+      <div class="field" id="scan-zoom-f" hidden><label for="scan-zoom">Zoom</label><input type="range" id="scan-zoom"></div>
+      <p class="hint" id="scan-msg">Afaste o celular uns 20 a 25 cm (de perto a câmera não foca) e use o zoom para o QR Code encher o quadro.</p>
+      <label class="btn ghost block nota-btn">${I.qr(18)} Tirar foto do QR Code<input type="file" id="scan-foto" accept="image/*" capture="environment" hidden></label>
       <details class="xp-plain"><summary>Não está lendo? Cole o link da nota</summary>
         <div class="field"><input class="input" id="scan-url" placeholder="https://www.nfce.fazenda.sp.gov.br/..." autocomplete="off"></div>
         <button class="btn ghost block" data-act="nota-url">Buscar nota</button>
@@ -1143,15 +1145,36 @@
       </details></div>`);
     const video = document.getElementById('scan-video');
     const msg = (t) => { const m = document.getElementById('scan-msg'); if (m) m.textContent = t; };
+    document.getElementById('scan-foto').addEventListener('change', async (e) => {
+      const f = e.target.files && e.target.files[0];
+      if (!f) return;
+      msg('Lendo a foto…');
+      const v = await lerQrImagem(f).catch(() => null);
+      if (v && /^https?:\/\//i.test(v)) { buscarNota(v); return; }
+      msg('Não achei o QR Code na foto. Tire de novo mais de perto, com o QR Code no centro e bem iluminado.');
+    });
     let ativo = true;
     let stream = null;
     scanStop = () => { ativo = false; if (stream) stream.getTracks().forEach((t) => t.stop()); };
     (async () => {
       try {
-        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
+        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false });
       } catch (e) { msg('Não consegui abrir a câmera. Permita o acesso à câmera ou cole o link da nota abaixo.'); return; }
       if (!ativo) { stream.getTracks().forEach((t) => t.stop()); return; }
       video.srcObject = stream; await video.play().catch(() => {});
+      try {
+        const track = stream.getVideoTracks()[0];
+        const cap = track.getCapabilities ? track.getCapabilities() : {};
+        if (cap.focusMode && cap.focusMode.includes('continuous')) await track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] });
+        if (cap.zoom && cap.zoom.max > 1) {
+          const z = document.getElementById('scan-zoom');
+          const ini = Math.min(cap.zoom.max, Math.max(cap.zoom.min || 1, 2));
+          Object.assign(z, { min: cap.zoom.min || 1, max: cap.zoom.max, step: cap.zoom.step || 0.1, value: ini });
+          document.getElementById('scan-zoom-f').hidden = false;
+          await track.applyConstraints({ advanced: [{ zoom: ini }] });
+          z.addEventListener('input', () => track.applyConstraints({ advanced: [{ zoom: Number(z.value) }] }).catch(() => {}));
+        }
+      } catch (e) { /* câmera sem foco/zoom ajustável */ }
       let detectar;
       if ('BarcodeDetector' in window) {
         const det = new window.BarcodeDetector({ formats: ['qr_code'] });
@@ -1176,6 +1199,25 @@
       };
       loop();
     })();
+  }
+
+  /** Lê o QR Code de uma foto (tenta a imagem inteira e o centro ampliado). */
+  async function lerQrImagem(file) {
+    const bmp = await createImageBitmap(file);
+    const cv = document.createElement('canvas');
+    const cx = cv.getContext('2d', { willReadFrequently: true });
+    const tentativas = [[0, 0, 1], [0.2, 0.2, 0.6], [0.1, 0.1, 0.8]];
+    const det = 'BarcodeDetector' in window ? new window.BarcodeDetector({ formats: ['qr_code'] }) : null;
+    const jsQR = det ? null : await carregarJsQR().catch(() => null);
+    for (const [fx, fy, fw] of tentativas) {
+      const sx = bmp.width * fx, sy = bmp.height * fy, sw = bmp.width * fw, sh = bmp.height * Math.min(fw, 1 - fy);
+      const esc2 = Math.min(1, 1600 / Math.max(sw, sh));
+      cv.width = Math.round(sw * esc2); cv.height = Math.round(sh * esc2);
+      cx.drawImage(bmp, sx, sy, sw, sh, 0, 0, cv.width, cv.height);
+      if (det) { const r = await det.detect(cv).catch(() => []); if (r[0]) return r[0].rawValue; }
+      else if (jsQR) { const r = jsQR(cx.getImageData(0, 0, cv.width, cv.height).data, cv.width, cv.height); if (r) return r.data; }
+    }
+    return null;
   }
 
   async function buscarNota(url) {
