@@ -260,3 +260,19 @@ button.venc { cursor: pointer; }
 .atalhos .chip { display: inline-flex; flex-direction: column; align-items: flex-start; gap: 2px; line-height: 1.15; padding-top: 8px; padding-bottom: 8px; }
 .atalhos .chip em { font-style: normal; font-size: 11px; opacity: .7; }
 .day-label { display: flex; justify-content: space-between; gap: 12px; }
+
+/* v1.7: nota fiscal */
+.top-actions { display: flex; gap: 8px; }
+.nota-btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; }
+.scan-box { position: relative; border-radius: 22px; overflow: hidden; background: #111; aspect-ratio: 1 / 1; max-height: 55vh; }
+.scan-box video { width: 100%; height: 100%; object-fit: cover; display: block; }
+.scan-frame { position: absolute; inset: 18%; border: 3px solid var(--lime); border-radius: 18px; box-shadow: 0 0 0 999px rgba(0,0,0,.35); }
+.xp-plain summary { cursor: pointer; font-size: 14px; text-decoration: underline; padding: 4px 0 10px; }
+.xp-plain[open] { display: flex; flex-direction: column; gap: 10px; }
+.item-name small.item-preco { display: block; font-size: 12px; color: var(--ink-2); text-decoration: none; margin-top: 2px; }
+.item.done .item-preco { text-decoration: none; }
+.nota-item { align-items: flex-start; }
+.nota-item .row-main { min-width: 0; gap: 2px; }
+.input.sm { margin-top: 8px; padding: 8px 10px; font-size: 14px; border-radius: 12px; height: auto; }
+.check-line { display: flex; align-items: center; gap: 10px; font-size: 15px; }
+.check-line input { width: 20px; height: 20px; accent-color: #111; }

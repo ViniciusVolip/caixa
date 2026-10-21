@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '1.6.0';
+  const VERSION = '1.7.0';
   const LOCK_AFTER_MS = 3 * 60 * 1000;
 
   /* ================= armazenamento local ================= */
@@ -68,6 +68,7 @@
   const svg = (d, size) => `<svg width="${size || 22}" height="${size || 22}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
   const I = {
     plus: (s) => svg('<path d="M12 5v14M5 12h14"/>', s),
+    qr: (s) => svg('<rect x="4" y="4" width="6" height="6" rx="1"/><rect x="14" y="4" width="6" height="6" rx="1"/><rect x="4" y="14" width="6" height="6" rx="1"/><path d="M14 14h2v2h-2zM18 18h2v2h-2zM14 18h2M18 14h2"/>', s),
     sync: (s) => svg('<path d="M20 12a8 8 0 0 1-14.3 4.9M4 12A8 8 0 0 1 18.3 7.1"/><path d="M18 3v4.5h-4.5M6 21v-4.5h4.5"/>', s),
     grid: (s) => svg('<rect x="4" y="4" width="7" height="7" rx="2"/><rect x="13" y="4" width="7" height="7" rx="2"/><rect x="4" y="13" width="7" height="7" rx="2"/><rect x="13" y="13" width="7" height="7" rx="2"/>', s),
     list: (s) => svg('<path d="M4 7h16M4 12h16M4 17h10"/>', s),
@@ -613,9 +614,16 @@
   function telaLista() {
     const { lista } = view();
     const feitos = lista.filter((i) => i.comprado).length;
-    let html = `<header class="top"><h1 class="page-title">Lista de mercado</h1><button class="icon-btn" data-act="novo-item" aria-label="Adicionar item">${I.plus(20)}</button></header>`;
+    const pr = (S.data && S.data.precos && S.data.precos.itens) || {};
+    let html = `<header class="top"><h1 class="page-title">Lista de mercado</h1><div class="top-actions"><button class="icon-btn" data-act="ler-nota" aria-label="Ler nota fiscal">${I.qr(20)}</button><button class="icon-btn" data-act="novo-item" aria-label="Adicionar item">${I.plus(20)}</button></div></header>
+    <button class="btn dark block nota-btn" data-act="ler-nota">${I.qr(18)} Ler nota fiscal (QR Code)</button>`;
     if (!lista.length) return html + `<div class="empty">Sua lista está vazia.<br><button class="btn dark" data-act="novo-item">Adicionar item</button></div>`;
     html += `<div class="list-progress"><div class="bar"><i style="width:${(feitos / lista.length) * 100}%"></i></div><span>${feitos} de ${lista.length} no carrinho</span></div>`;
+    const comPreco = lista.filter((i) => !i.comprado && pr[i.produto]);
+    if (comPreco.length) {
+      const est = comPreco.reduce((t, i) => t + pr[i.produto].unit * (Number(i.quantidade) || 1), 0);
+      html += `<p class="hint">Estimativa do que falta: <b>${brl(est)}</b>, com base no último preço de ${comPreco.length} de ${lista.filter((i) => !i.comprado).length} itens.</p>`;
+    }
     if (feitos) html += `<button class="btn ghost block" data-act="limpar-lista">Desmarcar todos</button>`;
     const grupos = {};
     const ordem = [];
@@ -625,7 +633,7 @@
       const itens = grupos[g].slice().sort((a, b) => Number(a.comprado) - Number(b.comprado));
       const ok = itens.filter((i) => i.comprado).length;
       html += `<section class="group"><div class="group-label"><span>${esc(g)}</span><span>${ok}/${itens.length}</span></div><div class="card">`;
-      html += itens.map((it) => `<button class="item${it.comprado ? ' done' : ''}" data-act="toggle-item" data-id="${esc(it.id)}" aria-pressed="${it.comprado}"><span class="check">${it.comprado ? I.check(16) : ''}</span><span class="item-name">${it.pending ? '<i class="pending-dot"></i>' : ''}${esc(it.produto)}</span><span class="item-qty">${it.quantidade ? String(it.quantidade).replace('.', ',') + 'x' : ''}</span></button>`).join('');
+      html += itens.map((it) => `<button class="item${it.comprado ? ' done' : ''}" data-act="toggle-item" data-id="${esc(it.id)}" aria-pressed="${it.comprado}"><span class="check">${it.comprado ? I.check(16) : ''}</span><span class="item-name">${it.pending ? '<i class="pending-dot"></i>' : ''}${esc(it.produto)}${pr[it.produto] ? `<small class="item-preco">${brl(pr[it.produto].unit)}${pr[it.produto].un && pr[it.produto].un !== 'UN' ? '/' + esc(pr[it.produto].un.toLowerCase()) : ''}, ${esc(pr[it.produto].mercado)}</small>` : ''}</span><span class="item-qty">${it.quantidade ? String(it.quantidade).replace('.', ',') + 'x' : ''}</span></button>`).join('');
       html += '</div></section>';
     });
     html += '</div>';
@@ -701,6 +709,7 @@
 
   /* ================= folhas (formulários) ================= */
   function openSheet(title, body, onMount) {
+    if (!/data-sheet="scan"/.test(body)) pararCamera();
     $sheet.innerHTML = `<div class="sheet-backdrop" data-act="close-sheet"></div>
       <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title">
         <div class="grabber" aria-hidden="true"></div>
@@ -710,7 +719,7 @@
     document.body.style.overflow = 'hidden';
     if (onMount) onMount($sheet.querySelector('.sheet'));
   }
-  function closeSheet() { $sheet.innerHTML = ''; document.body.style.overflow = ''; }
+  function closeSheet() { pararCamera(); $sheet.innerHTML = ''; document.body.style.overflow = ''; }
 
   const chips = (group, options, selected, labelFn) => `<div class="chips" role="group">${options.map((o) => `<button type="button" class="chip" data-group="${group}" data-value="${esc(o)}" aria-pressed="${o === selected}">${esc(labelFn ? labelFn(o) : o)}</button>`).join('')}</div>`;
   const picked = (root, group) => { const b = root.querySelector(`.chip[data-group="${group}"][aria-pressed="true"], .seg [data-group="${group}"][aria-pressed="true"]`); return b ? b.dataset.value : ''; };
@@ -904,6 +913,7 @@
     const nomes = Array.from(new Set(m.compras.map((c) => c.mercado))).filter(Boolean);
     openSheet('Compra de mercado', `
       <form id="f-mk" class="setup-form" novalidate>
+        <button type="button" class="btn dark block nota-btn" data-act="ler-nota">${I.qr(18)} Ler o QR Code da nota</button>
         <label class="money"><span>R$</span><span class="sr">Valor da nota</span><input id="m-valor" inputmode="decimal" autocomplete="off" placeholder="0,00"></label>
         <div class="field"><label for="m-nome">Mercado</label><input class="input" id="m-nome" list="m-nomes" autocomplete="off" value="${esc(nomes[0] || '')}"><datalist id="m-nomes">${nomes.map((n) => `<option value="${esc(n)}">`).join('')}</datalist></div>
         <div class="field"><span class="label">Compra para</span>${segOf('tipo', ['Casa', 'Pessoal'], 'Casa')}</div>
@@ -1106,6 +1116,152 @@
           : `A planilha tem ${brl(-dif)} a mais. Veja se alguma compra caiu em outra fatura ou foi lançada duas vezes.`;
       });
     });
+  }
+
+  /* ================= nota fiscal pelo QR Code ================= */
+  let scanStop = null;
+  function pararCamera() { if (scanStop) { scanStop(); scanStop = null; } }
+
+  function carregarJsQR() {
+    if (window.jsQR) return Promise.resolve(window.jsQR);
+    return new Promise((ok, fail) => {
+      const sc = document.createElement('script');
+      sc.src = 'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js';
+      sc.onload = () => ok(window.jsQR); sc.onerror = () => fail(new Error('sem leitor'));
+      document.head.appendChild(sc);
+    });
+  }
+
+  function telaScanner() {
+    openSheet('Ler nota fiscal', `<div data-sheet="scan">
+      <div class="scan-box"><video id="scan-video" playsinline muted></video><i class="scan-frame"></i></div>
+      <p class="hint" id="scan-msg">Aponte para o QR Code no rodapé da nota. Segure firme, a uns 15 cm.</p>
+      <details class="xp-plain"><summary>Não está lendo? Cole o link da nota</summary>
+        <div class="field"><input class="input" id="scan-url" placeholder="https://www.nfce.fazenda.sp.gov.br/..." autocomplete="off"></div>
+        <button class="btn ghost block" data-act="nota-url">Buscar nota</button>
+        <p class="hint">Dica: a câmera do celular também lê o QR Code e abre a nota no navegador. De lá, toque em Compartilhar e escolha o Caixa.</p>
+      </details></div>`);
+    const video = document.getElementById('scan-video');
+    const msg = (t) => { const m = document.getElementById('scan-msg'); if (m) m.textContent = t; };
+    let ativo = true;
+    let stream = null;
+    scanStop = () => { ativo = false; if (stream) stream.getTracks().forEach((t) => t.stop()); };
+    (async () => {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
+      } catch (e) { msg('Não consegui abrir a câmera. Permita o acesso à câmera ou cole o link da nota abaixo.'); return; }
+      if (!ativo) { stream.getTracks().forEach((t) => t.stop()); return; }
+      video.srcObject = stream; await video.play().catch(() => {});
+      let detectar;
+      if ('BarcodeDetector' in window) {
+        const det = new window.BarcodeDetector({ formats: ['qr_code'] });
+        detectar = async () => { const r = await det.detect(video); return r[0] && r[0].rawValue; };
+      } else {
+        const jsQR = await carregarJsQR().catch(() => null);
+        if (!jsQR) { msg('Este navegador não lê QR Code. Cole o link da nota abaixo.'); return; }
+        const cv = document.createElement('canvas'); const cx = cv.getContext('2d', { willReadFrequently: true });
+        detectar = async () => {
+          if (!video.videoWidth) return null;
+          cv.width = video.videoWidth; cv.height = video.videoHeight; cx.drawImage(video, 0, 0);
+          const r = jsQR(cx.getImageData(0, 0, cv.width, cv.height).data, cv.width, cv.height);
+          return r && r.data;
+        };
+      }
+      const loop = async () => {
+        if (!ativo) return;
+        let v = null;
+        try { v = await detectar(); } catch (e) { /* tenta de novo */ }
+        if (v && /^https?:\/\//i.test(v)) { pararCamera(); if (navigator.vibrate) navigator.vibrate(60); buscarNota(v); return; }
+        setTimeout(loop, 250);
+      };
+      loop();
+    })();
+  }
+
+  async function buscarNota(url) {
+    pararCamera();
+    openSheet('Ler nota fiscal', `<div class="empty">Buscando a nota na Sefaz…</div>`);
+    try {
+      const res = await api({ action: 'nota', url });
+      telaNota(res.data, url);
+    } catch (err) {
+      openSheet('Ler nota fiscal', `<div class="empty">${esc(err.network ? 'Sem conexão. Tente de novo quando tiver internet.' : err.message)}<br>
+        <button class="btn dark" data-act="ler-nota">Tentar de novo</button>
+        <a class="btn ghost" href="${esc(url)}" target="_blank" rel="noopener">Abrir no navegador</a></div>`);
+    }
+  }
+
+  const normTxt = (t) => String(t || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase();
+  /** Sugere o item da lista para um produto da nota: primeiro pelas ligações já feitas, depois por palavras parecidas. */
+  function sugerirItem(desc, lista) {
+    const al = (S.data && S.data.precos && S.data.precos.alias) || {};
+    const k = normTxt(desc).trim();
+    const salvo = Object.keys(al).find((x) => normTxt(x) === k);
+    if (salvo && lista.some((i) => i.produto === al[salvo])) return al[salvo];
+    const tn = k.split(/[^A-Z]+/).filter((w) => w.length >= 3);
+    let best = '', score = 0;
+    lista.forEach((i) => {
+      const tl = normTxt(i.produto).split(/[^A-Z]+/).filter((w) => w.length >= 3 && !/^(KG|UN|PCT|PACOTE|LITRO|ROLOS)$/.test(w));
+      if (!tl.length) return;
+      let hit = 0;
+      tl.forEach((w) => { if (tn.some((n) => w.startsWith(n) || n.startsWith(w))) hit++; });
+      const sc = hit / tl.length + (tn[0] && tl[0] && (tl[0].startsWith(tn[0]) || tn[0].startsWith(tl[0])) ? 0.5 : 0);
+      if (hit && sc > score) { score = sc; best = i.produto; }
+    });
+    return score >= 0.5 ? best : '';
+  }
+
+  function telaNota(n, url) {
+    const { lista } = view();
+    const L = cfgLists();
+    const nomeCurto = (n.emitente || 'Mercado').split(/\s+/)[0].toLowerCase().replace(/^./, (c) => c.toUpperCase());
+    const forma = /cr[eé]dito/i.test(n.forma) ? 'Nubank' : /d[eé]bito/i.test(n.forma) ? 'Débito' : /dinheiro/i.test(n.forma) ? 'Dinheiro' : 'Pix';
+    const jaFoi = ((S.data && S.data.mercado && S.data.mercado.compras) || []).some((c) => n.chave && (c.obs || '').includes(n.chave.slice(-8)));
+    const opts = (sel) => `<option value="">Não está na lista</option>${lista.map((i) => `<option value="${esc(i.produto)}"${i.produto === sel ? ' selected' : ''}>${esc(i.produto)}</option>`).join('')}`;
+    openSheet('Nota fiscal', `
+      <form id="f-nota" class="setup-form" novalidate>
+        <div class="cx-total"><small>${esc(n.emitente || '')}, ${esc(n.data.slice(8, 10) + '/' + n.data.slice(5, 7) + '/' + n.data.slice(0, 4))}</small><strong>${brl(n.total)}</strong>
+          <p class="hint">${n.itens.length} ${n.itens.length === 1 ? 'item' : 'itens'}${n.desconto ? `, ${brl(n.desconto)} de desconto` : ''}${n.forma ? ', ' + esc(n.forma) : ''}</p></div>
+        ${jaFoi ? '<p class="error">Esta nota já foi registrada antes. Salvar de novo não duplica a compra.</p>' : ''}
+        <div class="section-head"><h2>Itens</h2><small class="hint">ligue cada um à sua lista</small></div>
+        <div class="card nota-itens">${n.itens.map((it, i) => `<div class="row nota-item"><span class="row-main"><span>${esc(it.descricao)}</span><small>${String(it.qtd).replace('.', ',')} ${esc(it.un.toLowerCase())} × ${brl(it.unit)}</small><select class="input sm" data-i="${i}" aria-label="Item da lista para ${esc(it.descricao)}">${opts(sugerirItem(it.descricao, lista))}</select></span><span class="row-value">${brl(it.total)}</span></div>`).join('')}</div>
+        <div class="field"><label for="n-merc">Mercado</label><input class="input" id="n-merc" value="${esc(nomeCurto)}" autocomplete="off"></div>
+        <div class="field"><span class="label">Compra para</span>${segOf('tipo', ['Casa', 'Pessoal'], 'Casa')}</div>
+        <div class="field" id="n-pagopor"><span class="label">Quem pagou</span>${chips('pagoPor', L.pagoPor, 'Eu')}</div>
+        <div class="field"><span class="label">Forma de pagamento</span>${chips('forma', L.formas, L.formas.includes(forma) ? forma : 'Pix')}</div>
+        <label class="check-line"><input type="checkbox" id="n-marcar" checked> Marcar na lista os itens ligados</label>
+        <p class="error" hidden></p>
+        <button class="btn primary block" type="submit">Registrar compra de ${brl(n.total)}</button>
+      </form>`, (root) => {
+      root.addEventListener('chip', () => { root.querySelector('#n-pagopor').hidden = picked(root, 'tipo') !== 'Casa'; });
+      root.querySelector('#f-nota').addEventListener('submit', (e) => {
+        e.preventDefault();
+        const merc = root.querySelector('#n-merc').value.trim() || nomeCurto;
+        const tipo = picked(root, 'tipo') || 'Casa';
+        const itens = n.itens.map((it, i) => Object.assign({}, it, { item: root.querySelector(`select[data-i="${i}"]`).value }));
+        const sufixo = (n.chave || uid()).slice(-8);
+        enqueue('addMercado', {
+          valor: n.total, mercado: merc, tipo, pagoPor: tipo === 'Casa' ? picked(root, 'pagoPor') || 'Eu' : 'Eu',
+          forma: picked(root, 'forma') || 'Pix', data: n.data, obs: 'NFC-e ' + sufixo
+        }, n.chave ? 'NF' + n.chave.slice(-12) : uid('M'));
+        enqueue('addPrecos', { chave: n.chave, mercado: merc, data: n.data, itens }, uid('P'));
+        if (root.querySelector('#n-marcar').checked) {
+          const ligados = new Set(itens.map((i) => i.item).filter(Boolean));
+          lista.filter((i) => ligados.has(i.produto) && !i.comprado).forEach((i) => enqueue('toggleLista', { id: i.id, comprado: true }, uid('T')));
+        }
+        closeSheet();
+        toast(`Compra de ${brl(n.total)} registrada`);
+      });
+    });
+  }
+
+  /** Link compartilhado com o app (Compartilhar → Caixa). */
+  function lerCompartilhado() {
+    const q = new URLSearchParams(location.search);
+    if (!q.has('share')) return;
+    const m = ((q.get('url') || '') + ' ' + (q.get('text') || '') + ' ' + (q.get('title') || '')).match(/https?:\/\/\S+/);
+    history.replaceState(null, '', location.pathname + location.hash);
+    if (m && S.cfg) setTimeout(() => buscarNota(m[0]), 400);
   }
 
   /* ================= limites do orçamento ================= */
@@ -1331,6 +1487,8 @@
       case 'lanc': detalheLanc(id); break;
       case 'fixa': formFixa(id, arg); break;
       case 'fatura': telaFatura(); break;
+      case 'ler-nota': telaScanner(); break;
+      case 'nota-url': { const u = (document.getElementById('scan-url').value || '').trim(); if (/^https?:\/\//i.test(u)) buscarNota(u); else toast('Cole o link completo da nota'); break; }
       case 'orc-lista': orcLista(); break;
       case 'orc-form': formOrcamento(arg); break;
       case 'orc-del': enqueue('setOrcamento', { categoria: arg, limite: 0 }, uid('O')); orcLista(); toast('Limite removido'); break;
@@ -1451,7 +1609,7 @@
   } else {
     if (S.cfg && LS.get('pin', null)) S.gate = { mode: 'unlock', buf: '' };
     render();
-    if (S.cfg && !S.gate) sync();
+    if (S.cfg && !S.gate) { sync(); lerCompartilhado(); }
   }
 
   if ('serviceWorker' in navigator) {
