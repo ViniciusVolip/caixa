@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '1.8.0';
+  const VERSION = '1.9.0';
   const LOCK_AFTER_MS = 3 * 60 * 1000;
 
   /* ================= armazenamento local ================= */
@@ -581,15 +581,119 @@
         <div class="card">${cats.length ? cats.map((c) => { const its = itens.filter((i) => i.categoria === c.nome); return bloco('c:' + c.nome, catIcon(c.nome), c.nome, `${pct(r.despesas ? c.valor / r.despesas : 0)} das despesas`, c.valor, its); }).join('') : '<div class="empty">Nenhuma despesa neste mês.</div>'}</div></div></div>`;
       return html;
     }
+    return html + telaMercadoStats(d);
+  }
+
+  /* ================= estatísticas de mercado ================= */
+  const precosData = () => Object.assign({ itens: {}, alias: {}, notas: [], hist: {} }, (S.data && S.data.precos) || {});
+
+  function telaMercadoStats(d) {
     const m = d.mercado || { compras: [], meses: [] };
+    const P = precosData();
     const atual = monthStartIso(new Date());
+    const ant = monthStartIso(new Date(new Date().getFullYear(), new Date().getMonth() - 1, 1));
     const doMes = m.meses.find((x) => x.mes === atual) || { gasto: 0, compras: 0 };
-    html += `<div class="duo"><div class="stat dark"><span>Mercado em ${monthName(atual)}</span><strong>${brl(doMes.gasto)}</strong></div><div class="stat"><span>Compras no mês</span><strong>${doMes.compras}</strong></div></div>`;
-    if (!m.compras.length) return html + `<div class="empty">Nenhuma compra de mercado registrada ainda. Registre a próxima nota e o comparativo mês a mês aparece aqui.<br><button class="btn dark" data-act="novo-mercado">Registrar compra</button></div>`;
-    html += `<div class="card pad"><div class="card-title"><h3>Mês a mês</h3><small>Total das notas de mercado</small></div>${colsChart(m.meses, 'gasto', atual)}</div>`;
-    html += `<div class="section-head"><h2>Últimas compras</h2><button class="link" data-act="novo-mercado">Registrar compra</button></div>`;
-    html += `<div class="card">${m.compras.slice(0, 10).map((c) => `<div class="row"><span class="row-icon">${I.receipt(20)}</span><span class="row-main"><span>${esc(c.mercado)}</span><small>${dayLabel(c.data)}, ${esc(c.tipo)}</small></span><span class="row-value">${brl(c.valor)}</span></div>`).join('')}</div>`;
+    const doAnt = m.meses.find((x) => x.mes === ant);
+    let html = '';
+    const dif = doAnt ? doMes.gasto - doAnt.gasto : null;
+    html += `<div class="duo"><div class="stat dark"><span>Mercado em ${monthName(atual)}</span><strong>${brl(doMes.gasto)}</strong></div>
+      <div class="stat"><span>${dif === null ? 'Compras no mês' : 'Comparado a ' + monthName(ant)}</span><strong>${dif === null ? doMes.compras : (dif > 0 ? '+' : dif < 0 ? '−' : '') + brl(Math.abs(dif))}</strong></div></div>`;
+    if (!m.compras.length) return html + `<div class="empty">Nenhuma compra de mercado registrada ainda. Leia a próxima nota pelo QR Code e o histórico aparece aqui.<br><button class="btn dark" data-act="ler-nota" data-arg="mercado">Ler nota fiscal</button></div>`;
+
+    // mês a mês
+    const comGasto = m.meses.filter((x) => x.gasto > 0);
+    const media = comGasto.length ? comGasto.reduce((t, x) => t + x.gasto, 0) / comGasto.length : 0;
+    html += `<div class="card pad"><div class="card-title"><h3>Mês a mês</h3><small>Total das compras de mercado${comGasto.length > 1 ? `, média de ${brl(media)} por mês` : ''}</small></div>${colsChart(m.meses, 'gasto', atual)}</div>`;
+
+    // por seção (itens das notas do mês mais recente com nota)
+    const lista = view().lista;
+    const catDe = {};
+    lista.forEach((it) => { catDe[it.produto] = it.categoria || 'Outros'; });
+    const mesSec = P.notas.length ? monthStartIso(fromIso(P.notas[0].data)) : null;
+    if (mesSec) {
+      const sec = {};
+      P.notas.filter((n) => monthStartIso(fromIso(n.data)) === mesSec).forEach((n) => n.itens.forEach((it) => {
+        const c = it.i ? catDe[it.i] || 'Outros' : 'Sem ligação à lista';
+        sec[c] = (sec[c] || 0) + it.t;
+      }));
+      const linhas = Object.keys(sec).map((k) => ({ k, v: sec[k] })).sort((a, b) => b.v - a.v);
+      const tot = linhas.reduce((t, x) => t + x.v, 0) || 1;
+      const max = linhas.length ? linhas[0].v : 1;
+      html += `<div class="section-head"><h2>Por seção</h2><small class="hint">notas de ${monthName(mesSec)}</small></div>
+        <div class="card pad hbars">${linhas.map((x) => `<div class="hbar"><div class="hbar-top"><span>${esc(x.k)}</span><span>${brl(x.v)} <small>${pct(x.v / tot)}</small></span></div><span class="orc-bar"><i style="width:${(x.v / max * 100).toFixed(1)}%"></i></span></div>`).join('')}</div>`;
+    }
+
+    // produtos
+    const hk = Object.keys(P.hist);
+    const subiram = hk.map((k) => { const h = P.hist[k]; if (h.length < 2) return null; const a = h[h.length - 2].u, b = h[h.length - 1].u; return a > 0 && b > a ? { k, a, b, p: (b - a) / a } : null; })
+      .filter(Boolean).sort((x, y) => y.p - x.p).slice(0, 5);
+    const mais = hk.map((k) => ({ k, n: P.hist[k].length, u: P.hist[k][P.hist[k].length - 1].u })).sort((a, b) => b.n - a.n).slice(0, 5);
+    if (hk.length) {
+      html += `<div class="section-head"><h2>Produtos</h2></div>`;
+      if (subiram.length) html += `<div class="card"><div class="card-sub">Subiram de preço</div>${subiram.map((x) => `<button class="row" data-act="prod-det" data-id="${esc(x.k)}"><span class="row-main"><span>${esc(x.k)}</span><small>${brl(x.a)} → ${brl(x.b)}</small></span><span class="row-value neg">+${pct(x.p)}</span></button>`).join('')}</div>`;
+      html += `<div class="card"><div class="card-sub">Mais comprados</div>${mais.map((x) => `<button class="row" data-act="prod-det" data-id="${esc(x.k)}"><span class="row-main"><span>${esc(x.k)}</span><small>${x.n} ${x.n === 1 ? 'compra' : 'compras'}, último ${brl(x.u)}</small></span><span class="xp-chev" aria-hidden="true"></span></button>`).join('')}</div>`;
+      if (!subiram.length) html += `<p class="hint">Quando um produto for comprado de novo, a variação de preço aparece aqui.</p>`;
+    }
+
+    // histórico de compras, por mês
+    const porNota = {};
+    P.notas.forEach((n) => { if (n.chave && n.chave.length >= 8) porNota[n.chave.slice(-8)] = n; });
+    const grupos = {};
+    m.compras.forEach((c) => { (grupos[c.mes] = grupos[c.mes] || []).push(c); });
+    html += `<div class="section-head"><h2>Histórico de compras</h2><button class="link" data-act="ler-nota" data-arg="mercado">Ler nota</button></div>`;
+    Object.keys(grupos).sort().reverse().forEach((mes) => {
+      const cs = grupos[mes];
+      html += `<div class="day-label"><span>${esc(mesLabel(mes, atual))}</span><span>${brl(cs.reduce((t, c) => t + c.valor, 0))}</span></div><div class="card">`;
+      html += cs.map((c) => {
+        const suf = ((c.obs || '').match(/NFC-e (\w{8})/) || [])[1];
+        const n = suf && porNota[suf];
+        const sub = `${dayLabel(c.data)}, ${esc(c.tipo)}${n ? `, ${n.itens.length} ${n.itens.length === 1 ? 'item' : 'itens'}` : ''}`;
+        const inner = `<span class="row-icon">${n ? I.qr(20) : I.receipt(20)}</span><span class="row-main"><span>${esc(c.mercado)}</span><small>${sub}</small></span><span class="row-value">${brl(c.valor)}</span>`;
+        return n ? `<button class="row" data-act="nota-det" data-id="${esc(n.chave)}">${inner}</button>` : `<div class="row">${inner}</div>`;
+      }).join('');
+      html += '</div>';
+    });
+    if (m.compras.length >= 30) html += '<p class="hint">Mostrando as 30 compras mais recentes.</p>';
     return html;
+  }
+
+  function notaDetalhe(chave) {
+    const n = precosData().notas.find((x) => x.chave === chave);
+    if (!n) return;
+    openSheet(esc(n.mercado), `
+      <div class="cx-total"><small>${esc(dayLabel(n.data))}, ${n.itens.length} ${n.itens.length === 1 ? 'item' : 'itens'}</small><strong>${brl(n.total)}</strong><p class="hint">Soma dos itens da nota, antes de descontos.</p></div>
+      <div class="card">${n.itens.slice().sort((a, b) => b.t - a.t).map((it) => `<button class="row" data-act="prod-det" data-id="${esc(it.i || it.d)}"><span class="row-main"><span>${esc(it.i || it.d)}</span><small>${it.i ? esc(it.d) + ', ' : ''}${String(it.q).replace('.', ',')} ${esc((it.un || '').toLowerCase())} × ${brl(it.u)}</small></span><span class="row-value">${brl(it.t)}</span></button>`).join('')}</div>`);
+  }
+
+  function linhaPreco(h) {
+    const W = 320, H = 140, pl = 8, pr = 8, pt = 18, pb = 22;
+    const us = h.map((x) => x.u);
+    const min = Math.min(...us), max = Math.max(...us);
+    const span = max - min || max * 0.1 || 1;
+    const x = (i) => pl + (h.length === 1 ? (W - pl - pr) / 2 : (i / (h.length - 1)) * (W - pl - pr));
+    const y = (u) => pt + (1 - (u - min) / span) * (H - pt - pb);
+    const pts = h.map((p, i) => `${x(i).toFixed(1)},${y(p.u).toFixed(1)}`).join(' ');
+    const dm = (iso) => iso.slice(8, 10) + '/' + iso.slice(5, 7);
+    return `<svg class="pchart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Preço de ${brl(h[0].u)} a ${brl(h[h.length - 1].u)}">
+      <polyline points="${pts}" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>
+      ${h.map((p, i) => `<circle cx="${x(i).toFixed(1)}" cy="${y(p.u).toFixed(1)}" r="4.5" class="pdot${p.u === min ? ' min' : ''}"><title>${dm(p.data)}: ${brl(p.u)} (${p.m})</title></circle>`).join('')}
+      <text x="${pl}" y="${H - 6}" class="plab">${dm(h[0].data)}</text><text x="${W - pr}" y="${H - 6}" class="plab" text-anchor="end">${dm(h[h.length - 1].data)}</text>
+      <text x="${x(h.length - 1).toFixed(1)}" y="${(y(h[h.length - 1].u) - 9).toFixed(1)}" class="plab strong" text-anchor="${h.length === 1 ? 'middle' : 'end'}">${brl(h[h.length - 1].u)}</text>
+    </svg>`;
+  }
+
+  function produtoDetalhe(k) {
+    const h = precosData().hist[k];
+    if (!h || !h.length) { toast('Ainda não há preços guardados para este item.'); return; }
+    const porMerc = {};
+    h.forEach((p) => { if (!porMerc[p.m] || p.data > porMerc[p.m].data) porMerc[p.m] = p; });
+    const mercs = Object.values(porMerc).sort((a, b) => a.u - b.u);
+    const un = h[h.length - 1].un && h[h.length - 1].un !== 'UN' ? '/' + h[h.length - 1].un.toLowerCase() : '';
+    openSheet(esc(k), `
+      <div class="cx-total"><small>Último preço, ${esc(dayLabel(h[h.length - 1].data))}</small><strong>${brl(h[h.length - 1].u)}${un}</strong>
+        <p class="hint">${h.length > 1 ? `Menor: ${brl(Math.min(...h.map((p) => p.u)))}. Maior: ${brl(Math.max(...h.map((p) => p.u)))}. ${h.length} compras registradas.` : 'Primeira compra registrada. O gráfico aparece a partir da segunda.'}</p></div>
+      ${h.length > 1 ? `<div class="card pad">${linhaPreco(h)}</div>` : ''}
+      ${mercs.length > 1 ? `<div class="section-head"><h2>Por mercado</h2><small class="hint">último preço em cada um</small></div><div class="card">${mercs.map((p, i) => `<div class="row"><span class="row-main"><span>${esc(p.m)}${i === 0 ? ' <em class="tag">mais barato</em>' : ''}</span><small>${esc(dayLabel(p.data))}</small></span><span class="row-value">${brl(p.u)}</span></div>`).join('')}</div>` : ''}`);
   }
 
   function telaCombustivel() {
@@ -1581,6 +1685,8 @@
       case 'lanc': detalheLanc(id); break;
       case 'fixa': formFixa(id, arg); break;
       case 'fatura': telaFatura(); break;
+      case 'nota-det': notaDetalhe(id); break;
+      case 'prod-det': produtoDetalhe(id); break;
       case 'ler-nota': S.notaOrigem = arg || 'mercado'; telaScanner(); break;
       case 'nota-tipo': if (S.ultNota) escolherTipoNota(); break;
       case 'nota-como': if (S.ultNota) abrirNotaComo(arg); break;

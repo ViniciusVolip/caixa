@@ -277,3 +277,16 @@ button.venc { cursor: pointer; }
 .check-line { display: flex; align-items: center; gap: 10px; font-size: 15px; }
 .check-line input { width: 20px; height: 20px; accent-color: #111; }
 .nota-trocar { text-align: left; font-size: 13px; }
+
+/* v1.9: estatísticas de mercado */
+.hbars { display: flex; flex-direction: column; gap: 14px; }
+.hbar-top { display: flex; justify-content: space-between; gap: 10px; font-size: 14px; }
+.hbar-top small { color: var(--ink-2); margin-left: 4px; }
+.hbar .orc-bar { margin-top: 6px; height: 8px; }
+.card-sub { font-size: 13px; color: var(--ink-2); padding: 14px 16px 2px; }
+.pchart { width: 100%; height: auto; display: block; color: var(--ink); }
+.pchart .pdot { fill: var(--card); stroke: currentColor; stroke-width: 2; }
+.pchart .pdot.min { fill: var(--lime); }
+.pchart .plab { font-size: 11px; fill: var(--ink-2); }
+.pchart .plab.strong { font-size: 13px; font-weight: 700; fill: var(--ink); }
+.tag { font-style: normal; font-size: 11px; background: var(--lime); border-radius: 99px; padding: 2px 8px; margin-left: 6px; }
