@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '1.9.0';
+  const VERSION = '1.10.0';
   const LOCK_AFTER_MS = 3 * 60 * 1000;
 
   /* ================= armazenamento local ================= */
@@ -108,7 +108,10 @@
     S.queue.forEach((o) => {
       if (o.op === 'addLancamento') pend.push(Object.assign({}, o.data, { id: o.id, minhaParte: o.data.tipo === 'Casa' ? o.data.valor * ((d.config && d.config.minhaParteCasa) || 0.5) : o.data.valor, pending: true }));
       if (o.op === 'addAbastecimento') pend.push({ id: 'AB-' + o.id, data: o.data.data, mes: monthStartIso(fromIso(o.data.data)), descricao: 'Abastecimento posto ' + o.data.posto, categoria: 'Transporte', tipo: 'Pessoal', forma: o.data.forma, valor: o.data.total, minhaParte: o.data.total, pending: true });
-      if (o.op === 'addMercado') pend.push({ id: 'MK-' + o.id, data: o.data.data, mes: monthStartIso(fromIso(o.data.data)), descricao: 'Mercado ' + o.data.mercado, categoria: o.data.tipo === 'Casa' ? 'Compras da casa' : 'Alimentação', tipo: o.data.tipo, forma: o.data.forma, valor: o.data.valor, minhaParte: o.data.tipo === 'Casa' ? o.data.valor * 0.5 : o.data.valor, pending: true });
+      if (o.op === 'addMercado') {
+        const v = Math.round((o.data.valor - (o.data.flash || 0)) * 100) / 100;
+        if (v > 0.004) pend.push({ id: 'MK-' + o.id, data: o.data.data, mes: o.data.mes || monthStartIso(fromIso(o.data.data)), descricao: 'Mercado ' + o.data.mercado, categoria: o.data.tipo === 'Casa' ? 'Compras da casa' : 'Alimentação', tipo: o.data.tipo, forma: o.data.flash ? o.data.formaResto : o.data.forma, valor: v, minhaParte: o.data.tipo === 'Casa' ? v * 0.5 : v, pending: true });
+      }
     });
     const edits = {};
     S.queue.forEach((o) => { if (o.op === 'updateLancamento') edits[o.data.id] = o.data; });
@@ -1028,14 +1031,23 @@
         <div class="field"><label for="m-nome">Mercado</label><input class="input" id="m-nome" list="m-nomes" autocomplete="off" value="${esc(nomes[0] || '')}"><datalist id="m-nomes">${nomes.map((n) => `<option value="${esc(n)}">`).join('')}</datalist></div>
         <div class="field"><span class="label">Compra para</span>${segOf('tipo', ['Casa', 'Pessoal'], 'Casa')}</div>
         <div class="field" id="m-pagopor"><span class="label">Quem pagou</span>${chips('pagoPor', L.pagoPor, 'Eu')}</div>
-        <div class="field"><span class="label">Forma de pagamento</span>${chips('forma', L.formas, 'Pix')}</div>
+        <div class="field"><span class="label">Forma de pagamento</span>${chips('forma', L.formas.concat([FLASH]), 'Pix')}</div>
+        ${flashCampos(L, 0, monthStartIso(new Date()))}
         <div class="field"><label for="m-data">Data</label><input class="input" type="date" id="m-data" value="${todayIso()}"></div>
         <div class="field"><label for="m-obs">Observações</label><input class="input" id="m-obs" autocomplete="off"></div>
         <p class="error" hidden></p>
         <button class="btn primary block" type="submit">Salvar compra</button>
       </form>`, (root) => {
       setTimeout(() => root.querySelector('#m-valor').focus(), 250);
-      root.addEventListener('chip', () => { root.querySelector('#m-pagopor').hidden = picked(root, 'tipo') !== 'Casa'; });
+      const totM = () => parseMoney(root.querySelector('#m-valor').value) || 0;
+      root.addEventListener('chip', () => {
+        root.querySelector('#m-pagopor').hidden = picked(root, 'tipo') !== 'Casa';
+        const fv = root.querySelector('#fl-valor');
+        if (picked(root, 'forma') === FLASH && !fv.value && totM()) fv.value = Math.min(totM(), Math.max(0, vaMensal() - flashUsado(monthStartIso(new Date())))).toFixed(2).replace('.', ',');
+        flashSync(root, totM);
+      });
+      root.querySelector('#fl-valor').addEventListener('input', () => flashSync(root, totM));
+      root.querySelector('#m-valor').addEventListener('input', () => flashSync(root, totM));
       root.querySelector('#f-mk').addEventListener('submit', (e) => {
         e.preventDefault();
         const v = parseMoney(root.querySelector('#m-valor').value);
@@ -1043,10 +1055,15 @@
         if (!(v > 0)) return showError(root, 'Digite o valor da nota.');
         if (!nome) return showError(root, 'Diga em qual mercado foi.');
         const tipo = picked(root, 'tipo') || 'Casa';
-        enqueue('addMercado', {
+        const fl = flashDados(root, v);
+        const dd = root.querySelector('#m-data').value || todayIso();
+        const fPag = fl.flash !== undefined ? (fl.formaResto || '') : picked(root, 'forma') || 'Pix';
+        enqueue('addMercado', Object.assign({
           valor: v, mercado: nome, tipo, pagoPor: tipo === 'Casa' ? picked(root, 'pagoPor') || 'Eu' : 'Eu',
-          forma: picked(root, 'forma') || 'Pix', data: root.querySelector('#m-data').value || todayIso(), mes: (() => { const dd = root.querySelector('#m-data').value || todayIso(); return picked(root, 'forma') === 'Nubank' ? mesFatura(dd) : monthStartIso(fromIso(dd)); })(), obs: root.querySelector('#m-obs').value.trim()
-        }, uid('M'));
+          forma: fl.flash !== undefined ? (fl.formaResto ? 'Flash + ' + fl.formaResto : FLASH) : picked(root, 'forma') || 'Pix',
+          data: dd, mes: fPag === 'Nubank' ? mesFatura(dd) : monthStartIso(fromIso(dd)),
+          obs: [root.querySelector('#m-obs').value.trim(), fl.obsFlash].filter(Boolean).join(', ')
+        }, fl.flash !== undefined ? { flash: fl.flash, formaResto: fl.formaResto || 'Pix' } : {}), uid('M'));
         closeSheet();
         toast('Compra guardada. Ela também entra nos lançamentos.');
       });
@@ -1228,6 +1245,38 @@
     });
   }
 
+  /* ================= Flash (vale-alimentação) ================= */
+  const FLASH = 'Flash (VA)';
+  const vaMensal = () => Number(LS.get('vaMensal', 140)) || 140;
+  function flashUsado(mes) {
+    const m = (S.data && S.data.mercado && S.data.mercado.compras) || [];
+    let t = m.filter((c) => c.mes === mes).reduce((s, c) => { const x = (c.obs || '').match(/Flash R\$ ([\d.,]+)/); return s + (x ? parseMoney(x[1]) : 0); }, 0);
+    S.queue.forEach((o) => { if (o.op === 'addMercado' && o.data.flash && monthStartIso(fromIso(o.data.data)) === mes) t += o.data.flash; });
+    return Math.round(t * 100) / 100;
+  }
+  /** Bloco do Flash nos formulários de mercado: valor no Flash e forma do restante. */
+  function flashCampos(L, total, mes) {
+    const usado = flashUsado(mes);
+    const resta = Math.max(0, vaMensal() - usado);
+    return `<div id="flash-box" class="field" hidden>
+      <label for="fl-valor">Quanto saiu do Flash</label><input class="input" id="fl-valor" inputmode="decimal" value="${total ? Math.min(total, resta || total).toFixed(2).replace('.', ',') : ''}">
+      <p class="hint">Flash em ${monthName(mes)}: ${brl(usado)} usados de ${brl(vaMensal())}, restam ${brl(resta)}. O que sai do Flash fica no histórico do mercado, mas não entra nas suas despesas.</p>
+      <div id="fl-resto" hidden><span class="label">O restante foi pago com</span>${chips('formaResto', L.formas.filter((f) => f !== FLASH), 'Pix')}</div></div>`;
+  }
+  function flashSync(root, total) {
+    const on = picked(root, 'forma') === FLASH;
+    root.querySelector('#flash-box').hidden = !on;
+    const fv = parseMoney(root.querySelector('#fl-valor').value) || 0;
+    const t = typeof total === 'function' ? total() : total;
+    root.querySelector('#fl-resto').hidden = !(on && t - fv > 0.004);
+  }
+  function flashDados(root, total) {
+    if (picked(root, 'forma') !== FLASH) return {};
+    const fv = Math.min(total, parseMoney(root.querySelector('#fl-valor').value) || 0);
+    const formaResto = total - fv > 0.004 ? picked(root, 'formaResto') || 'Pix' : '';
+    return { flash: Math.round(fv * 100) / 100, formaResto, obsFlash: 'Flash R$ ' + fv.toFixed(2).replace('.', ',') };
+  }
+
   /* ================= nota fiscal pelo QR Code ================= */
   let scanStop = null;
   function pararCamera() { if (scanStop) { scanStop(); scanStop = null; } }
@@ -1359,7 +1408,10 @@
       if (!tl.length) return;
       let hit = 0;
       tl.forEach((w) => { if (tn.some((n) => w.startsWith(n) || n.startsWith(w))) hit++; });
-      const sc = hit / tl.length + (tn[0] && tl[0] && (tl[0].startsWith(tn[0]) || tn[0].startsWith(tl[0])) ? 0.5 : 0);
+      const primeiro = tn[0] && tl[0] && (tl[0].startsWith(tn[0]) || tn[0].startsWith(tl[0]));
+      // sem bater a primeira palavra, só aceita se todas as palavras do item baterem e forem longas (evita "LAYS SAL MAR" virar "Sal")
+      if (!primeiro && !(hit === tl.length && tl.every((w) => w.length >= 5))) return;
+      const sc = hit / tl.length + (primeiro ? 0.5 : 0);
       if (hit && sc > score) { score = sc; best = i.produto; }
     });
     return score >= 0.5 ? best : '';
@@ -1368,7 +1420,7 @@
   function telaNota(n, url) {
     const { lista } = view();
     const L = cfgLists();
-    const nomeCurto = (n.emitente || 'Mercado').split(/\s+/)[0].toLowerCase().replace(/^./, (c) => c.toUpperCase());
+    const nomeCurto = nomeDaNota(n);
     const forma = /cr[eé]dito/i.test(n.forma) ? 'Nubank' : /d[eé]bito/i.test(n.forma) ? 'Débito' : /dinheiro/i.test(n.forma) ? 'Dinheiro' : 'Pix';
     const jaFoi = ((S.data && S.data.mercado && S.data.mercado.compras) || []).some((c) => n.chave && (c.obs || '').includes(n.chave.slice(-8)));
     const opts = (sel) => `<option value="">Não está na lista</option>${lista.map((i) => `<option value="${esc(i.produto)}"${i.produto === sel ? ' selected' : ''}>${esc(i.produto)}</option>`).join('')}`;
@@ -1383,29 +1435,35 @@
         <div class="field"><label for="n-merc">Mercado</label><input class="input" id="n-merc" value="${esc(nomeCurto)}" autocomplete="off"></div>
         <div class="field"><span class="label">Compra para</span>${segOf('tipo', ['Casa', 'Pessoal'], 'Casa')}</div>
         <div class="field" id="n-pagopor"><span class="label">Quem pagou</span>${chips('pagoPor', L.pagoPor, 'Eu')}</div>
-        <div class="field"><span class="label">Forma de pagamento</span>${chips('forma', L.formas, L.formas.includes(forma) ? forma : 'Pix')}</div>
+        <div class="field"><span class="label">Forma de pagamento</span>${chips('forma', L.formas.concat([FLASH]), L.formas.includes(forma) ? forma : 'Pix')}</div>
+        ${flashCampos(L, n.total, monthStartIso(fromIso(n.data)))}
         <label class="check-line"><input type="checkbox" id="n-marcar" checked> Marcar na lista os itens ligados</label>
         <p class="error" hidden></p>
         <button class="btn primary block" type="submit">Registrar compra de ${brl(n.total)}</button>
       </form>`, (root) => {
-      root.addEventListener('chip', () => { root.querySelector('#n-pagopor').hidden = picked(root, 'tipo') !== 'Casa'; });
+      root.addEventListener('chip', () => { root.querySelector('#n-pagopor').hidden = picked(root, 'tipo') !== 'Casa'; flashSync(root, n.total); });
+      root.querySelector('#fl-valor').addEventListener('input', () => flashSync(root, n.total));
       root.querySelector('#f-nota').addEventListener('submit', (e) => {
         e.preventDefault();
         const merc = root.querySelector('#n-merc').value.trim() || nomeCurto;
         const tipo = picked(root, 'tipo') || 'Casa';
         const itens = n.itens.map((it, i) => Object.assign({}, it, { item: root.querySelector(`select[data-i="${i}"]`).value }));
         const sufixo = (n.chave || uid()).slice(-8);
-        enqueue('addMercado', {
+        const fl = flashDados(root, n.total);
+        const fPag = fl.flash !== undefined ? (fl.formaResto || '') : picked(root, 'forma') || 'Pix';
+        enqueue('addMercado', Object.assign({
           valor: n.total, mercado: merc, tipo, pagoPor: tipo === 'Casa' ? picked(root, 'pagoPor') || 'Eu' : 'Eu',
-          forma: picked(root, 'forma') || 'Pix', data: n.data, mes: (picked(root, 'forma') === 'Nubank' ? mesFatura(n.data) : monthStartIso(fromIso(n.data))), obs: 'NFC-e ' + sufixo
-        }, n.chave ? 'NF' + n.chave.slice(-12) : uid('M'));
+          forma: fl.flash !== undefined ? (fl.formaResto ? 'Flash + ' + fl.formaResto : FLASH) : picked(root, 'forma') || 'Pix',
+          data: n.data, mes: (fPag === 'Nubank' ? mesFatura(n.data) : monthStartIso(fromIso(n.data))),
+          obs: ['NFC-e ' + sufixo, fl.obsFlash].filter(Boolean).join(', ')
+        }, fl.flash !== undefined ? { flash: fl.flash, formaResto: fl.formaResto || 'Pix' } : {}), n.chave ? 'NF' + n.chave.slice(-12) : uid('M'));
         enqueue('addPrecos', { chave: n.chave, mercado: merc, data: n.data, itens }, uid('P'));
         if (root.querySelector('#n-marcar').checked) {
           const ligados = new Set(itens.map((i) => i.item).filter(Boolean));
           lista.filter((i) => ligados.has(i.produto) && !i.comprado).forEach((i) => enqueue('toggleLista', { id: i.id, comprado: true }, uid('T')));
         }
         closeSheet();
-        toast(`Compra de ${brl(n.total)} registrada`);
+        toast(fl.flash !== undefined ? `Compra registrada: ${brl(fl.flash)} no Flash${n.total - fl.flash > 0.004 ? `, ${brl(n.total - fl.flash)} nas suas despesas` : ', fora das suas despesas'}` : `Compra de ${brl(n.total)} registrada`);
       });
     });
   }
