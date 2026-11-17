@@ -290,3 +290,15 @@ button.venc { cursor: pointer; }
 .pchart .plab { font-size: 11px; fill: var(--ink-2); }
 .pchart .plab.strong { font-size: 13px; font-weight: 700; fill: var(--ink); }
 .tag { font-style: normal; font-size: 11px; background: var(--lime); border-radius: 99px; padding: 2px 8px; margin-left: 6px; }
+
+/* v1.11: aba Cartão, menu com 6 itens */
+.duo .stat em { display: block; font-style: normal; font-size: 12px; opacity: .7; margin-top: 6px; }
+.duo .stat.tile-btn { text-align: left; border: 0; }
+.row-value small { font-size: 11px; opacity: .6; margin-left: 2px; }
+@media (max-width: 959px) {
+  .nav { gap: 4px; padding: 7px; }
+  .nav button { width: 46px; height: 46px; }
+}
+@media (max-width: 360px) {
+  .nav button { width: 42px; height: 42px; }
+}

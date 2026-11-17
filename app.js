@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '1.10.0';
+  const VERSION = '1.11.0';
   const LOCK_AFTER_MS = 3 * 60 * 1000;
 
   /* ================= armazenamento local ================= */
@@ -559,12 +559,10 @@
   function telaEstatisticas() {
     const { d } = view();
     let html = `<header class="top"><h1 class="page-title">Estatísticas</h1></header>
-      <div class="seg" role="group" aria-label="Assunto">
-        <button data-act="stats-tab" data-arg="categorias" aria-pressed="${S.statsTab === 'categorias'}">Categorias</button>
-        <button data-act="stats-tab" data-arg="mercado" aria-pressed="${S.statsTab === 'mercado'}">Mercado</button>
+      <div hidden>
       </div>`;
     if (!d.resumo) return html + loading();
-    if (S.statsTab === 'categorias') {
+    if (true) {
       const { lancamentos } = view();
       const dm = dadosMes(d);
       html += mesChips(d, lancamentos);
@@ -723,7 +721,10 @@
     const { lista } = view();
     const feitos = lista.filter((i) => i.comprado).length;
     const pr = (S.data && S.data.precos && S.data.precos.itens) || {};
-    let html = `<header class="top"><h1 class="page-title">Lista de mercado</h1><div class="top-actions"><button class="icon-btn" data-act="ler-nota" aria-label="Ler nota fiscal">${I.qr(20)}</button><button class="icon-btn" data-act="novo-item" aria-label="Adicionar item">${I.plus(20)}</button></div></header>
+    const segM = `<div class="seg" role="group" aria-label="Mercado"><button data-act="merc-tab" data-arg="lista" aria-pressed="${S.mercTab !== 'historico'}">Lista</button><button data-act="merc-tab" data-arg="historico" aria-pressed="${S.mercTab === 'historico'}">Histórico</button></div>`;
+    if (S.mercTab === 'historico') return `<header class="top"><h1 class="page-title">Mercado</h1><div class="top-actions"><button class="icon-btn" data-act="ler-nota" data-arg="mercado" aria-label="Ler nota fiscal">${I.qr(20)}</button></div></header>${segM}` + telaMercadoStats(view().d);
+    let html = `<header class="top"><h1 class="page-title">Mercado</h1><div class="top-actions"><button class="icon-btn" data-act="ler-nota" aria-label="Ler nota fiscal">${I.qr(20)}</button><button class="icon-btn" data-act="novo-item" aria-label="Adicionar item">${I.plus(20)}</button></div></header>
+    ${segM}
     <button class="btn dark block nota-btn" data-act="ler-nota">${I.qr(18)} Ler nota fiscal (QR Code)</button>`;
     if (!lista.length) return html + `<div class="empty">Sua lista está vazia.<br><button class="btn dark" data-act="novo-item">Adicionar item</button></div>`;
     html += `<div class="list-progress"><div class="bar"><i style="width:${(feitos / lista.length) * 100}%"></i></div><span>${feitos} de ${lista.length} no carrinho</span></div>`;
@@ -1245,6 +1246,115 @@
     });
   }
 
+  /* ================= aba Cartão ================= */
+  const addMes = (iso, n) => monthStartIso(new Date(fromIso(iso).getFullYear(), fromIso(iso).getMonth() + n, 1));
+  function cartaoDados() {
+    const c = Object.assign({ parcelados: [], hist: [] }, (S.data && S.data.cartao) || {});
+    const par = c.parcelados.slice();
+    const hist = c.hist.map((h) => Object.assign({}, h));
+    S.queue.forEach((o) => {
+      if (o.op === 'addParcelado') par.push(Object.assign({ pending: true, fim: addMes(o.data.ini, o.data.n - 1) }, o.data));
+      if (o.op === 'deleteParcelado') { const i = par.findIndex((p) => p.descricao === o.data.descricao && p.ini === o.data.ini); if (i >= 0) par.splice(i, 1); }
+      const forma = o.op === 'addLancamento' ? o.data.forma : o.op === 'addAbastecimento' ? o.data.forma : o.op === 'addMercado' ? (o.data.flash ? o.data.formaResto : o.data.forma) : '';
+      if (forma === 'Nubank') {
+        const v = o.op === 'addAbastecimento' ? o.data.total : o.data.valor - (o.data.flash || 0);
+        const h = hist.find((x) => x.mes === (o.data.mes || monthStartIso(fromIso(o.data.data))));
+        if (h) { h.total = Math.round((h.total + v) * 100) / 100; h.compras += v; }
+      }
+    });
+    return { par, hist };
+  }
+
+  function telaCartao() {
+    const { d } = view();
+    if (!d.resumo) return loading();
+    const { par, hist } = cartaoDados();
+    const hoje = fromIso(todayIso());
+    const aberta = mesFatura(todayIso());
+    const fechada = addMes(aberta, -1);
+    const hA = hist.find((h) => h.mes === aberta) || { total: 0, compras: 0, fixas: 0, parcelas: 0 };
+    const hF = hist.find((h) => h.mes === fechada) || { total: 0 };
+    const dFech = new Date(hoje.getFullYear(), hoje.getMonth() + (hoje.getDate() >= fechNubank() ? 1 : 0), fechNubank());
+    const diasFech = Math.round((dFech - hoje) / 86400000);
+    const dVencF = new Date(fromIso(fechada).getFullYear(), fromIso(fechada).getMonth(), vencNubank());
+    const diasVenc = Math.round((dVencF - hoje) / 86400000);
+    const ativos = par.filter((p) => p.fim >= aberta || p.fim >= fechada).map((p) => {
+      const idx = (fromIso(aberta).getFullYear() - fromIso(p.ini).getFullYear()) * 12 + fromIso(aberta).getMonth() - fromIso(p.ini).getMonth() + 1;
+      const pagas = Math.max(0, Math.min(p.n, idx - 1));
+      return Object.assign({}, p, { atual: Math.min(p.n, Math.max(1, idx)), resta: Math.round(p.parcela * (p.n - pagas) * 100) / 100, futura: idx < 1 });
+    });
+    const restaTot = ativos.reduce((t, p) => t + p.resta, 0);
+    let html = `<header class="top"><h1 class="page-title">Cartão</h1></header>
+    <div class="duo">
+      <button class="stat dark tile-btn" data-act="cart-fatura" data-arg="${aberta}"><span>Fatura aberta, ${monthName(aberta)}</span><strong>${brl(hA.total)}</strong><em>fecha ${diasFech === 0 ? 'hoje' : diasFech === 1 ? 'amanhã' : 'em ' + diasFech + ' dias'}</em></button>
+      <button class="stat tile-btn" data-act="cart-fatura" data-arg="${fechada}"><span>Fatura de ${monthName(fechada)}</span><strong>${brl(hF.total)}</strong><em>${diasVenc > 1 ? 'vence em ' + diasVenc + ' dias' : diasVenc === 1 ? 'vence amanhã' : diasVenc === 0 ? 'vence hoje' : 'venceu dia ' + vencNubank()}</em></button>
+    </div>
+    <div class="cx-actions"><button class="btn primary" data-act="fat-novo">Nova compra</button><button class="btn ghost" data-act="parc-novo">Compra parcelada</button></div>
+    <p class="hint">A fatura aberta já soma ${brl(hA.compras)} em compras${hA.parcelas ? `, ${brl(hA.parcelas)} em parcelas` : ''}${hA.fixas ? ` e ${brl(hA.fixas)} de contas fixas` : ''}. Toque numa fatura para ver os itens e conferir com o app do Nubank.</p>`;
+    html += `<div class="section-head"><h2>Parcelamentos</h2>${ativos.length ? `<small class="hint">faltam ${brl(restaTot)}</small>` : ''}</div>`;
+    html += ativos.length ? `<div class="card">${ativos.map((p) => `<button class="row" data-act="parc-det" data-id="${esc(p.descricao)}" data-arg="${p.ini}"><span class="row-icon">${catIcon(p.categoria)}</span><span class="row-main"><span>${p.pending ? '<i class="pending-dot"></i>' : ''}${esc(p.descricao)}</span><small>${p.futura ? 'Começa em ' + monthName(p.ini) : p.fim < aberta ? `Última parcela, na fatura de ${monthName(p.fim)}` : `Parcela ${p.atual} de ${p.n}, até ${monthShort(p.fim)}`}</small><span class="orc-bar"><i style="width:${((p.futura ? 0 : p.atual) / p.n * 100).toFixed(1)}%"></i></span></span><span class="row-value">${brl(p.parcela)}<small>/mês</small></span></button>`).join('')}</div>`
+      : `<p class="hint">Nenhuma compra parcelada em andamento. Use "Compra parcelada" para registrar: cada parcela entra sozinha na fatura certa.</p>`;
+    const passado = hist.filter((h) => h.mes <= aberta && (h.total > 0 || h.mes === aberta)).slice(-6);
+    if (passado.some((h) => h.total > 0)) {
+      const com = passado.filter((h) => h.mes < aberta && h.total > 0);
+      const media = com.length ? com.reduce((t, h) => t + h.total, 0) / com.length : 0;
+      html += `<div class="card pad"><div class="card-title"><h3>Faturas</h3><small>${media ? `Média de ${brl(media)} nas fechadas` : 'Total de cada fatura'}</small></div>${colsChart(passado, 'total', aberta)}</div>`;
+    }
+    const fut = hist.filter((h) => h.mes > aberta && h.parcelas + h.fixas > 0);
+    if (fut.length) html += `<div class="section-head"><h2>Já comprometido</h2><small class="hint">parcelas e contas fixas</small></div><div class="card">${fut.map((h) => `<div class="row"><span class="row-main"><span>Fatura de ${monthName(h.mes)}</span><small>${brl(h.parcelas)} em parcelas, ${brl(h.fixas)} em contas fixas</small></span><span class="row-value">${brl(h.parcelas + h.fixas)}</span></div>`).join('')}</div>`;
+    return html;
+  }
+
+  function formParcelado() {
+    const L = cfgLists();
+    const aberta = mesFatura(todayIso());
+    const opcoesMes = [aberta, addMes(aberta, 1)];
+    openSheet('Compra parcelada', `
+      <form id="f-parc" class="setup-form" novalidate>
+        <label class="money"><span>R$</span><span class="sr">Valor total da compra</span><input id="p-total" inputmode="decimal" autocomplete="off" placeholder="0,00"></label>
+        <div class="field"><label for="p-desc">Descrição</label><input class="input" id="p-desc" autocomplete="off" placeholder="Ex.: Pneus, Celular"></div>
+        <div class="field"><span class="label">Parcelas</span>${chips('n', ['2', '3', '4', '5', '6', '10', '12'], '3', (x) => x + 'x')}<input class="input sm" id="p-n" inputmode="numeric" placeholder="Outro número"></div>
+        <p class="hint" id="p-info">Digite o valor total e escolha as parcelas.</p>
+        <div class="field"><span class="label">Categoria</span>${chips('categoria', L.categorias, '')}</div>
+        <div class="field"><span class="label">É um gasto</span>${segOf('tipo', ['Pessoal', 'Casa'], 'Pessoal')}</div>
+        <div class="field"><span class="label">Primeira parcela na fatura de</span>${chips('ini', opcoesMes, aberta, monthShort)}<p class="hint">Compras a partir do dia ${fechNubank()} caem na fatura seguinte.</p></div>
+        <p class="error" hidden></p>
+        <button class="btn primary block" type="submit">Salvar compra parcelada</button>
+      </form>`, (root) => {
+      const nVal = () => Math.round(Number(root.querySelector('#p-n').value) || Number(picked(root, 'n')) || 0);
+      const info = () => {
+        const t = parseMoney(root.querySelector('#p-total').value), n = nVal();
+        root.querySelector('#p-info').textContent = t > 0 && n > 0 ? `${n}x de ${brl(Math.round(t / n * 100) / 100)}, de ${monthShort(picked(root, 'ini') || aberta)} até ${monthShort(addMes(picked(root, 'ini') || aberta, n - 1))}.` : 'Digite o valor total e escolha as parcelas.';
+      };
+      setTimeout(() => root.querySelector('#p-total').focus(), 250);
+      root.querySelector('#p-total').addEventListener('input', info);
+      root.querySelector('#p-n').addEventListener('input', info);
+      root.addEventListener('chip', info);
+      root.querySelector('#f-parc').addEventListener('submit', (e) => {
+        e.preventDefault();
+        const t = parseMoney(root.querySelector('#p-total').value), n = nVal();
+        const desc = root.querySelector('#p-desc').value.trim();
+        if (!(t > 0)) return showError(root, 'Digite o valor total da compra.');
+        if (!desc) return showError(root, 'Escreva uma descrição.');
+        if (!(n >= 2 && n <= 48)) return showError(root, 'Escolha de 2 a 48 parcelas.');
+        const categoria = picked(root, 'categoria');
+        if (!categoria) return showError(root, 'Escolha uma categoria.');
+        enqueue('addParcelado', { descricao: desc, categoria, tipo: picked(root, 'tipo') || 'Pessoal', parcela: Math.round(t / n * 100) / 100, n, ini: picked(root, 'ini') || aberta }, uid('Q'));
+        closeSheet();
+        toast(`${desc}: ${n}x de ${brl(Math.round(t / n * 100) / 100)}`);
+      });
+    });
+  }
+
+  function parceladoDetalhe(desc, ini) {
+    const p = cartaoDados().par.find((x) => x.descricao === desc && x.ini === ini);
+    if (!p) return;
+    openSheet(esc(p.descricao), `
+      <div class="cx-total"><small>${p.n}x de ${brl(p.parcela)}, ${esc(p.categoria || '')}</small><strong>${brl(p.parcela * p.n)}</strong><p class="hint">De ${monthName(p.ini)} até ${monthName(p.fim)}.</p></div>
+      <div class="card">${Array.from({ length: p.n }, (_, i) => { const m = addMes(p.ini, i); return `<div class="row"><span class="row-main"><span>Parcela ${i + 1} de ${p.n}</span><small>Fatura de ${monthName(m)}</small></span><span class="row-value">${brl(p.parcela)}</span></div>`; }).join('')}</div>
+      <button class="btn danger block" data-act="parc-del" data-id="${esc(p.descricao)}" data-arg="${p.ini}">Apagar compra parcelada</button>`);
+  }
+
   /* ================= Flash (vale-alimentação) ================= */
   const FLASH = 'Flash (VA)';
   const vaMensal = () => Number(LS.get('vaMensal', 140)) || 140;
@@ -1659,8 +1769,9 @@
   const NAV = [
     ['inicio', 'Início', I.grid],
     ['lancamentos', 'Lançamentos', I.list],
+    ['cartao', 'Cartão', I.card],
     ['estatisticas', 'Estatísticas', I.chart],
-    ['lista', 'Lista de mercado', I.cart],
+    ['lista', 'Mercado', I.cart],
     ['combustivel', 'Combustível', I.fuel]
   ];
   function renderNav(show) {
@@ -1669,7 +1780,7 @@
     $nav.innerHTML = '<div class="nav-brand" aria-hidden="true"><span>C</span>Caixa</div>' + NAV.map(([id, label, ic]) => `<button data-act="go" data-arg="${id}" aria-label="${label}"${S.screen === id ? ' aria-current="page"' : ''}>${ic()}<span class="nav-label">${label}</span></button>`).join('');
   }
 
-  const TELAS = { inicio: telaInicio, lancamentos: telaLancamentos, estatisticas: telaEstatisticas, lista: telaLista, combustivel: telaCombustivel };
+  const TELAS = { inicio: telaInicio, lancamentos: telaLancamentos, cartao: telaCartao, estatisticas: telaEstatisticas, lista: telaLista, combustivel: telaCombustivel };
 
   function render() {
     const focusId = document.activeElement && document.activeElement.id === 'busca' ? 'busca' : null;
@@ -1743,6 +1854,13 @@
       case 'lanc': detalheLanc(id); break;
       case 'fixa': formFixa(id, arg); break;
       case 'fatura': telaFatura(); break;
+      case 'cart-fatura': escolherMes(arg); telaFatura(); break;
+      case 'parc-novo': formParcelado(); break;
+      case 'parc-det': parceladoDetalhe(id, arg); break;
+      case 'parc-del':
+        if (t.dataset.confirm !== '1') { t.dataset.confirm = '1'; t.textContent = 'Toque de novo para apagar'; break; }
+        enqueue('deleteParcelado', { descricao: id, ini: arg }, uid('Q')); closeSheet(); toast('Compra parcelada apagada'); break;
+      case 'merc-tab': S.mercTab = arg; render(); break;
       case 'nota-det': notaDetalhe(id); break;
       case 'prod-det': produtoDetalhe(id); break;
       case 'ler-nota': S.notaOrigem = arg || 'mercado'; telaScanner(); break;
